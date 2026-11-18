@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ACCEPT, acceptLabel, words, readable, whereNow, commitsLine, filesLine, moreLine, proofTitle } from "./accept.js";
+import { ACCEPT, acceptLabel, cairnLine, cairnState, cairnWords, words, readable, whereNow, commitsLine, filesLine, moreLine, proofTitle } from "./accept.js";
 
 const root = join(import.meta.dir, "..");
 const read = (p) => readFileSync(join(root, p), "utf8");
@@ -42,8 +42,36 @@ test("the window's card and the web's read their words from here, not their own"
   const mod = read("mods/accept-card/main.js"), web = read("web/src/screens/Accept.tsx");
   expect(mod).toContain('from "./core/accept.js"');
   expect(web).toContain("@core/accept.js");
-  for (const w of ["Reading the task", "No summary.", "No proof artifact.", "Already accepted.", "Not ready right now"]) {
+  for (const w of ["Reading the task", "No summary.", "No proof artifact.", "Already accepted.", "Not ready right now",
+                   "No Cairn change linked.", "Gates pass", "no pull request."]) {
     expect(mod).not.toContain(w);
     expect(web).not.toContain(w);
+  }
+});
+
+// onix: the linked Cairn change's gates, and what Accept does in an Onix repo (a fast-forward and push, no PR)
+test("a Cairn change reads passed only when every gate said PASS and validate is valid", () => {
+  const pass = { change: "add-gates", gates: { proposal: "PASS", design: "PASS", tasks: "PASS" }, valid: true };
+  expect(cairnState(pass)).toBe("passed");
+  expect(cairnState({ ...pass, gates: { ...pass.gates, design: "FAIL" } })).toBe("failed");
+  expect(cairnState({ ...pass, valid: false })).toBe("failed");
+  // an error (no cairn there, a policy skew) and a gate that didn't say PASS are unknown, never a pass
+  expect(cairnState({ ...pass, gates: { ...pass.gates, tasks: "unknown" } })).toBe("unknown");
+  expect(cairnState({ ...pass, valid: null })).toBe("unknown");
+  expect(cairnState(undefined)).toBe("none");
+  expect(cairnLine(pass)).toBe("proposal pass · design pass · tasks pass");
+  expect(cairnLine({ ...pass, gates: { ...pass.gates, design: "FAIL" } })).toBe("proposal pass · design fail · tasks pass");
+  expect([cairnWords("passed"), cairnWords("failed"), cairnWords("unknown"), cairnWords("none")])
+    .toEqual(["Gates pass", "Gates fail", "Gates unknown", "Gates unknown"]);
+  expect(ACCEPT.onixMerge("main")).toBe("Accept fast-forwards main and pushes it to origin: no pull request.");
+});
+
+test("both cards show the Cairn verdicts and say what Accept does in an Onix repo", () => {
+  const mod = read("mods/accept-card/main.js"), web = read("web/src/screens/Accept.tsx");
+  for (const src of [mod, web]) {
+    expect(src).toContain("cairnState");
+    expect(src).toContain("cairnLine");
+    expect(src).toContain("ACCEPT.onixMerge");
+    expect(src).toContain("ACCEPT.cairn");
   }
 });

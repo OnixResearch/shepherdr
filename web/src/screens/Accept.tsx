@@ -28,6 +28,10 @@ type Evidence = {
   checks?: { state: 'passed' | 'failed' | 'running' | 'none' | 'unknown'; text: string }
   /** Accept merges its branch first (it has work to merge): the button says "Accept and merge" */
   merges?: boolean
+  /** onix: how Accept lands its work here, and the linked Cairn change's recorded gates */
+  forge?: 'github' | 'onix'
+  base?: string
+  cairn?: { change?: string | null; gates?: Record<string, string>; valid?: boolean | null; why?: string }
 }
 type Shown = { ref: string; title: string; state: string; status_text?: string; accepted_at?: number; evidence?: Evidence }
 
@@ -87,6 +91,28 @@ function Changes({ e }: { e: Evidence }) {
           {d.list.map((f) => <li key={f.path} className="truncate">{f.path}</li>)}
           {d.files > d.list.length ? <li className="font-sans text-fg3 tabular-nums">{A.moreLine(d.files - d.list.length)}</li> : null}
         </ul>
+      ) : null}
+    </div>
+  )
+}
+
+// onix: the linked Cairn change (an Onix repo's task): its read-only gates as herdr-task recorded them before
+// Accept (a FAIL stops the merge), and what validate said. An error there is unknown, with why: never shown as a pass.
+function Cairn({ c }: { c?: Evidence['cairn'] }) {
+  const state = A.cairnState(c)
+  if (state === 'none' && !c?.change) return <p className="text-fg3">{A.ACCEPT.cairnNoChange}</p>
+  const dot = { passed: 'bg-ready', failed: 'bg-need', unknown: 'bg-work' }[state] ?? 'bg-fg3'
+  const rows = [A.cairnLine(c), c?.valid === true || c?.valid === false ? A.ACCEPT.cairnValidate(c.valid) : '', c?.why ?? ''].filter(Boolean)
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <p className="flex items-center gap-2">
+        <span className={clsx('size-[7px] shrink-0 rounded-full', dot)} />
+        <span>{`${c?.change ?? A.ACCEPT.cairn} · ${A.cairnWords(state)}`}</span>
+      </p>
+      {rows.length ? (
+        <div className="flex flex-col gap-0.5 text-xs text-fg3">
+          {rows.map((r) => <p key={r} className="min-w-0 break-words">{r}</p>)}
+        </div>
       ) : null}
     </div>
   )
@@ -175,6 +201,7 @@ export function AcceptCard() {
   // what follows the summary (and the proof, when it shows in the card)
   const rest = (
     <>
+      {e.forge === 'onix' && e.merges !== false ? <p className="text-[0.8125rem] text-fg3">{A.ACCEPT.onixMerge(e.base ?? 'main')}</p> : null}
       <Section label={A.ACCEPT.changes}><Changes e={e} /></Section>
       <Section label={A.ACCEPT.checks}>
         <p className="flex items-center gap-2">
@@ -182,6 +209,9 @@ export function AcceptCard() {
           <span className={clsx(!e.checks || e.checks.state === 'none' ? 'text-fg3' : '')}>{e.checks?.text ?? A.ACCEPT.noChecks}</span>
         </p>
       </Section>
+      {e.forge === 'onix' || e.cairn?.change ? (
+        <Section label={A.ACCEPT.cairn}><Cairn c={e.cairn} /></Section>
+      ) : null}
       {proofArt ? null : (
         <Section label={A.ACCEPT.proof}>
           {e.proof ? <ArtifactRow a={e.proof} /> : <p className="text-fg3">{A.ACCEPT.noProof}</p>}

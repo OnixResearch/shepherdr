@@ -27,12 +27,34 @@ export const ACCEPT = {
   acceptMerge: "Accept and merge",
   accepting: "Accepting…",
   noTask: "No task to accept.",
+  // onix: an Onix repo's linked Cairn change's gates, and what Accept does there (fast-forward the base and push
+  // it, never a pull request). Core is shared by the window's card and the web's.
+  cairn: "Cairn",
+  cairnNoChange: "No Cairn change linked.",
+  cairnPassed: "Gates pass",
+  cairnFailed: "Gates fail",
+  cairnUnknown: "Gates unknown",
+  cairnValidate: (v) => (v === true ? "validate: valid" : v === false ? "validate: invalid" : "validate: unknown"),
+  onixMerge: (base) => `Accept fast-forwards ${base} and pushes it to origin: no pull request.`,
 };
 
 // The Accept button's words (SHEP-225, #1046): what pressing it will do. herdr-task's evidence says `merges` when its
 // branch has work to merge (whatever the Merge setting, Accept merges that first); plain Accept when it only marks the
 // task done (it worked in the folder itself, or nothing is left to merge), and while the card is still being read.
 export const acceptLabel = (e) => (e?.merges ? ACCEPT.acceptMerge : ACCEPT.accept);
+
+// The linked Cairn change (an Onix repo's task: `cairn` is its change slug, `gates` the read-only gates herdr-task
+// recorded before Accept, `valid` its validate): "passed" only when every gate ran and said PASS and validate said
+// valid; a FAIL (or an invalid change) is "failed"; anything missing or errored is "unknown", never a pass.
+export const cairnState = (c) => {
+  const vs = Object.values(c?.gates ?? {});
+  if (vs.includes("FAIL") || c?.valid === false) return "failed";
+  if (!vs.length && (c?.valid === undefined || c?.valid === null)) return "none";
+  return vs.some((v) => v !== "PASS") || c?.valid !== true ? "unknown" : "passed";
+};
+export const cairnVerdict = (v) => (v === "PASS" ? "pass" : v === "FAIL" ? "fail" : "unknown");
+export const cairnLine = (c) => Object.entries(c?.gates ?? {}).map(([k, v]) => `${k} ${cairnVerdict(v)}`).join(" · ");
+export const cairnWords = (state) => ({ passed: ACCEPT.cairnPassed, failed: ACCEPT.cairnFailed }[state] ?? ACCEPT.cairnUnknown);
 
 export const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 // "3 commits", "12 files changed", "And 4 more"

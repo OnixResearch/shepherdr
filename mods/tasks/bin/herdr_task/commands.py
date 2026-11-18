@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from . import sandbox
+from . import onix, sandbox
 from .base import Fail, git, guard, now, run, STORE, stop_note, VERSION
 from .settings import (
     agent_argv, agent_key, bare, merge_policy, review_limits, set_opts, settings_block, settings_for, space_base,
@@ -22,7 +22,7 @@ from .agents import (
 )
 from .sessions import refresh_sessions
 from .github import (already_merged, checks_missing, github_unreachable, pr_for_branch, checks_since, drop_branch, expected_checks, finish, gh, github, merged_here, needs_approval, note_checks, own_work, pr_adopt, pr_open,
-                     pr_pending, pr_problem, pr_view, remote_of, update_main, watch_main)
+                     pr_pending, pr_problem, pr_view, released, remote_of, update_main, watch_main)
 from .github import CHECKS_RUNNING as PR_CHECKS_RUNNING
 from .launch import (
     base_ref, brief, caller_labels, caller_space, current_base, default_space, folder_for, handoff, launch, name_tabs,
@@ -109,6 +109,12 @@ def cmd_add(args):
         mode = "here" if args.here or not worktrees_on(s) else "worktree"
         t = s.new(args.title.strip(), prompt, mode)
         set_opts(t, args)
+        # onix: the linked Cairn change, from --cairn, else the brief's own "Cairn: <slug>" line
+        slug = getattr(args, "cairn", None)
+        if slug is None:
+            slug = onix.brief_cairn(prompt)
+        if slug is not None:
+            onix.link(t, slug)
         space = bare(args.space) if args.space else caller_space()
         set_base(s, t, args.base, space, new=True)
         set_branch(s, t, getattr(args, "branch", None))
@@ -248,6 +254,13 @@ def cmd_show(args):
         text.append(f"for AGENTS.md: {v['agents_md']}")
     if v.get("pr"):
         text.append(f"pull request: #{v['pr']['number']} {v['pr']['url']}")
+    if v.get("cairn"):
+        gates = v.get("cairn_gates") or {}
+        said = ", ".join(f"{k} {gates.get(k, 'unknown')}" for k in onix.GATES) if gates.get("gates") else "not run yet"
+        text.append(f"cairn: {v['cairn']} ({said}" + ("" if gates.get("valid") is None else
+                    f"; validate {'valid' if gates['valid'] else 'invalid'}") + ")")
+    if v.get("onix_merge"):
+        text.append(f"onix merge: {v['onix_merge']['sha'][:7]} fast-forwarded into {v['onix_merge']['base']} and pushed")
     if v.get("why") and v["status"] == "needs":
         text.append(f"needs the person: {v['why']}")
     if v.get("proof"):
@@ -423,6 +436,13 @@ def cmd_ready(args):
             t["nothing_to_merge"] = True
         else:
             t.pop("nothing_to_merge", None)
+        # onix: the linked Cairn change's read-only gates, before anyone merges (the card shows them,
+        # and a FAIL stops the auto-merge; an error is unknown with why, never a PASS)
+        if t.get("cairn"):
+            t["cairn_gates"] = onix.check_gates(s, t)
+            s.dirty = True
+        else:
+            t.pop("cairn_gates", None)
         # Its work already in its base (SHEP-59: its pull request squash-merged, or nothing left to
         # merge): done at once, never a second pull request.
         gone = already_merged(s, t) if wt and t.get("start") and not t.get("nothing_to_merge") else None
@@ -705,6 +725,38 @@ def back_to_work(s, t, why, said=WORKING_AGAIN, auto=False):
 READY_BUT = "is ready, but:"  # finalize() couldn't push or open its pull request
 
 
+def onix_merge_now(s, t, gates=None):
+    """onix: merges the task's branch into its base and pushes it, no pull request (onix.merge).
+    The linked Cairn change's gates run first (once: a caller that just ran them passes gates): a
+    FAIL stops the merge with its reason, an error never does. None when merged (the task follows:
+    onix_merge written, merged set, done), else why it didn't (attention set, so Needs you says why)."""
+    if t.get("cairn") and gates is None:
+        gates = onix.check_gates(s, t)
+    if gates:
+        t["cairn_gates"] = gates
+        s.dirty = True
+        why = onix.gate_failures(gates)
+        if why:
+            t["attention"], t["attention_at"] = why, now()
+            return why
+    # A fetch, a rebase and a push can wait on the network or a hook: the task list's lock goes meanwhile.
+    with released(s):
+        res = onix.merge(s, t)
+    s.dirty = True
+    if res.get("sha"):
+        # A rebase onto origin/<base> rewrote its branch: ready's head is old now.
+        t["head"] = res["sha"]
+    if not res.get("ok"):
+        why = str(res.get("why") or "the merge didn't go through")
+        t["attention"], t["attention_at"] = why, now()
+        return why
+    t["onix_merge"] = {"sha": res["sha"], "base": res["base"], "at": res["at"]}
+    t.pop("attention", None)
+    t["merged"] = True
+    finish(s, t, even_if_busy=True)
+    return None
+
+
 def finalize(s, t):
     """Ready: on GitHub its pull request opens; then the merge policy in Settings decides who
     merges: auto (now), checks (once its checks pass) or ask (the person). Returns what to say."""
@@ -744,6 +796,17 @@ def finalize(s, t):
         pr["wait"] = PR_CHECKS_RUNNING
         msg = (f"{s.ref(t)} is ready: pull request #{pr['number']}, {pr['url']}. It shows Working until its checks "
                "pass and GitHub says it can merge; a failing check or a conflict comes back to you to fix.")
+    if onix.mode(s):
+        # onix: no pull request to open or wait on; Settings' merge policy decides whether Herdr
+        # fast-forwards the base and pushes it now (a Cairn FAIL, just recorded, stops it).
+        policy = merge_policy(s, t)
+        if policy in ("auto", "checks"):
+            t["auto_merge"] = policy
+            error = onix_merge_now(s, t)
+            return msg + (f" Merging it waits: {error}" if error else " Merged; done.")
+        t.pop("auto_merge", None)
+        return msg + (f" The person accepts it in the Tasks panel: it fast-forwards {t.get('base') or 'main'} "
+                      "and pushes it to origin (no pull request).")
     policy = merge_policy(s, t)
     if policy in ("auto", "checks"):
         t["auto_merge"] = policy
@@ -1152,7 +1215,12 @@ def cmd_merge(args):
         if t.get("mode") != "worktree" or not t.get("worktree"):
             raise Fail(f"{s.ref(t)} works in the folder itself; there is nothing to merge.")
         sent, started, how = None, False, "agent"
-        if t.get("pr") or own_open_pr(s, t):
+        if onix.mode(s):
+            # onix: the Merge button merges the Onix way too: fast-forward the base and push it (a
+            # linked Cairn change's FAIL stops it), never a pull request.
+            how = "onix"
+            error = onix_merge_now(s, t)
+        elif t.get("pr") or own_open_pr(s, t):
             # On GitHub: Herdr merges the pull request itself (squash), then tidies up here.
             how = "github"
             error = merge_now(s, t)
@@ -1170,10 +1238,11 @@ def cmd_merge(args):
     if error:
         say(args, {**v, "error": error}, None) if args.json else print(f"herdr-task: {error}", file=sys.stderr)
         sys.exit(1)
-    text = f"{s.ref(t)}: pull request #{t['pr']['number']} merged; done." if how == "github" else \
+    text = f"{s.ref(t)}: fast-forwarded {t.get('base') or 'main'} and pushed it; done." if how == "onix" else \
+        f"{s.ref(t)}: pull request #{t['pr']['number']} merged; done." if how == "github" else \
         f"{s.ref(t)}: pull request #{t['pr']['number']} is in GitHub's merge queue; done once GitHub merges it." if how == "queue" else \
         f"{s.ref(t)}: merge asked of {sent}" + (" (a new agent)" if started else "")
-    say(args, {**v, "terminal": sent, "new_agent": started, "merged": how == "github", "queued": how == "queue"}, text)
+    say(args, {**v, "terminal": sent, "new_agent": started, "merged": how in ("github", "onix"), "queued": how == "queue"}, text)
 
 
 def branch_tip(s, t):
@@ -1239,9 +1308,24 @@ def cmd_accept(args):
         wt = t.get("worktree") if t.get("mode") == "worktree" else None
         t["accepted_at"] = now()
         s.dirty = True
-        if not wt:
+        # onix: the linked Cairn change's gates run before Accept does anything (a FAIL stops it, as
+        # a failing check does: the reason is on the task and the change must pass, or be merged by hand)
+        gates = onix.check_gates(s, t) if t.get("cairn") else None
+        if gates:
+            t["cairn_gates"] = gates
+            s.dirty = True
+        gates_why = onix.gate_failures(gates)
+        if gates_why:
+            t["attention"], t["attention_at"] = gates_why, now()
+            t.pop("accepted_at", None)
+            error, how = gates_why, "gates"
+        elif not wt:
             # Worked in the folder itself: nothing to merge.
             finish(s, t)
+        elif onix.mode(s) and not (merged_here(s, t) or in_base(s, t)):
+            # onix: no pull request (github() says None here): fast-forward the base and push it.
+            how = "onix"
+            error = onix_merge_now(s, t, gates)
         elif t.get("pr") or own_open_pr(s, t):
             how = "github"
             error = merge_now(s, t)
@@ -1270,6 +1354,7 @@ def cmd_accept(args):
         sys.exit(1)
     text = {"done": f"{s.ref(t)} accepted: done.",
             "merged": f"{s.ref(t)} accepted: merged into {t.get('base') or 'main'}; done.",
+            "onix": f"{s.ref(t)} accepted: fast-forwarded {t.get('base') or 'main'} and pushed it; done.",
             "github": f"{s.ref(t)} accepted: pull request #{(t.get('pr') or {}).get('number')} merged; done.",
             "checks": f"{s.ref(t)} accepted: it merges once its checks pass.",
             "approval": f"{s.ref(t)} accepted: it merges once it's approved.",
