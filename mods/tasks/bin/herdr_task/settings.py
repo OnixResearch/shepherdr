@@ -490,6 +490,14 @@ def reviewer_command(who, model=None, effort=None, folder=None):
     return shlex.join(a)
 
 
+def _onix_mode(s, space):
+    """onix: this folder's tasks merge the Onix way (onix.mode). Imported here: onix.py imports this module."""
+    from . import onix
+    if not isinstance(getattr(s, "loc", None), dict) or "kind" not in s.loc:
+        return False
+    return onix.mode(s, space)
+
+
 def task_settings(s, t, space=None, argv=None, live=False):
     """The settings that shape this task's work, each {label, text, value, by}. live: for a brief, so its Reviewer
     line is checked against what Codex says now (sign-in and models), not only the last periodic check."""
@@ -577,6 +585,13 @@ def task_settings(s, t, space=None, argv=None, live=False):
         if t.get("base_set"):
             add("Base", f"{t['base']}: your branch starts from it and merges into it", t["base"],
                 "folder" if t.get("base_by") == "space" else "task")
+    # onix: an Onix repo merges by fast-forwarding its base and pushing it (onix.py), and a task can name its
+    # Cairn change: both shape the worker's work, so its brief says them (templates/worker.md's Onix line).
+    if not here and _onix_mode(s, space):
+        add("Forge", "Onix: no pull request; after Accept, Herdr fast-forwards the base branch and pushes it",
+            "onix", None)
+    if t.get("cairn"):
+        add("Cairn", f"{t['cairn']}: the Cairn change you work in; its gates run when you say ready", t["cairn"], "task")
     proof = sets["proof"] == "on" if "proof" in sets else k.get("proof") is not False
     add("Proof", PROOF_WORDS["on" if proof else "off"], proof,
         "task" if "proof" in sets else by_layer(s, space, "tasks", "proof", proof, True))

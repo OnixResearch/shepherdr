@@ -395,6 +395,25 @@ class OnixForge(unittest.TestCase):
         self.assertIs(v["cairn_gates"]["valid"], True)
         self.assertEqual(v["onix_merge"], {"sha": "a" * 40, "base": "main", "at": 2})
 
+    def test_the_brief_names_the_onix_merge_and_the_cairn_change(self):
+        self.onix_repo()
+        wt, _ = self.task_branch()
+        self.add("Wire it", cairn="add-gates")
+        self.attach(wt)
+        with Store(locate(self.repo)) as s:
+            block = st.settings_block(s, s.find("1"))
+        self.assertIn("- Forge: Onix: no pull request; after Accept, Herdr fast-forwards the base branch and pushes it", block)
+        self.assertIn("- Cairn: add-gates: the Cairn change you work in", block)
+
+    def test_a_github_repo_brief_has_no_onix_lines(self):
+        wt, _ = self.task_branch()
+        self.add("Wire it")
+        self.attach(wt)
+        with Store(locate(self.repo)) as s:
+            block = st.settings_block(s, s.find("1"))
+        self.assertNotIn("- Forge:", block)
+        self.assertNotIn("- Cairn:", block)
+
     # ---- ready and Accept ----------------------------------------------------------------
 
     def test_accept_fast_forwards_and_pushes_without_a_pull_request(self):
