@@ -35,7 +35,10 @@ export const ACCEPT = {
   cairnFailed: "Gates fail",
   cairnUnknown: "Gates unknown",
   cairnValidate: (v) => (v === true ? "validate: valid" : v === false ? "validate: invalid" : "validate: unknown"),
-  onixMerge: (base) => `Accept fast-forwards ${base} and pushes it to origin: no pull request.`,
+  // onix: with a Radicle patch (herdr-task's radicle.py) Accept merges that patch: the base goes to rad, then origin
+  onixMerge: (base, rad) => (rad?.patch
+    ? `Accept merges Radicle patch ${String(rad.patch).slice(0, 7)}: it fast-forwards ${base} and pushes it to rad, then origin.`
+    : `Accept fast-forwards ${base} and pushes it to origin: no pull request.`),
 };
 
 // The Accept button's words (SHEP-225, #1046): what pressing it will do. herdr-task's evidence says `merges` when its

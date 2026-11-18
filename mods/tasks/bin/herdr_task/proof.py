@@ -107,6 +107,9 @@ def evidence(s, t):
     # Cairn change's recorded gates (ready and Accept write them; the card shows them)
     out["forge"] = onix.forge(s)
     out["base"] = t.get("base") or "main"
+    # onix: the task's Radicle patch, when its work goes out as one (radicle.py): Accept merges it
+    if isinstance(t.get("radicle"), dict) and t["radicle"].get("patch"):
+        out["radicle"] = {k: t["radicle"].get(k) for k in ("patch", "rid", "state", "offline")}
     if t.get("cairn") or t.get("cairn_gates"):
         out["cairn"] = {"change": t.get("cairn"), **(t.get("cairn_gates") or {})}
     out["artifacts"] = task_artifacts(s, t, out["proof"])

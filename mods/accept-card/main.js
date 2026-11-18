@@ -324,7 +324,7 @@ export default class AcceptCard extends View {
           .child(w.summary || ACCEPT.noSummary))
         // onix: what Accept does here, said before the sections (no pull request is opened)
         .when(Boolean(e.forge === "onix" && e.merges !== false), (el) => el.child(div().text_size(TEXT.label).text_color(t.muted)
-          .child(ACCEPT.onixMerge(e.base ?? "main"))))
+          .child(ACCEPT.onixMerge(e.base ?? "main", e.radicle))))
         .child(this.section(t, ACCEPT.changes, this.changes(t, e)))
         .child(this.section(t, ACCEPT.checks, this.checks(t, e)))
         .when(Boolean(e.forge === "onix" || e.cairn?.change), (el) => el.child(this.section(t, ACCEPT.cairn, this.cairn(t, e))))

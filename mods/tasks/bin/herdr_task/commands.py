@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from . import onix, sandbox
+from . import onix, radicle, sandbox
 from .base import Fail, git, guard, now, run, STORE, stop_note, VERSION
 from .settings import (
     agent_argv, agent_key, bare, merge_policy, review_limits, set_opts, settings_block, settings_for, space_base,
@@ -260,7 +260,14 @@ def cmd_show(args):
         text.append(f"cairn: {v['cairn']} ({said}" + ("" if gates.get("valid") is None else
                     f"; validate {'valid' if gates['valid'] else 'invalid'}") + ")")
     if v.get("onix_merge"):
-        text.append(f"onix merge: {v['onix_merge']['sha'][:7]} fast-forwarded into {v['onix_merge']['base']} and pushed")
+        m = v["onix_merge"]
+        text.append(f"onix merge: {m['sha'][:7]} fast-forwarded into {m['base']} and pushed"
+                    + (f" to {m['remote']}" if m.get("remote") else "")
+                    + (f"; {m['mirror']['remote']} not updated: {m['mirror'].get('why')}" if (m.get("mirror") or {}).get("ok") is False else ""))
+    if v.get("radicle"):
+        r = v["radicle"]
+        text.append(f"radicle patch: {r['patch'][:7]} in {r['rid']}" + (f" ({r['state']})" if r.get("state") else " (open)")
+                    + (" — this machine's node isn't running: announced once it runs" if r.get("offline") else ""))
     if v.get("why") and v["status"] == "needs":
         text.append(f"needs the person: {v['why']}")
     if v.get("proof"):
@@ -743,6 +750,9 @@ def onix_merge_now(s, t, gates=None):
     with released(s):
         res = onix.merge(s, t)
     s.dirty = True
+    if res.get("radicle"):
+        # onix: the task's Radicle patch (radicle.py), opened or given its new revision on the way
+        t["radicle"] = res["radicle"]
     if res.get("sha"):
         # A rebase onto origin/<base> rewrote its branch: ready's head is old now.
         t["head"] = res["sha"]
@@ -750,7 +760,9 @@ def onix_merge_now(s, t, gates=None):
         why = str(res.get("why") or "the merge didn't go through")
         t["attention"], t["attention_at"] = why, now()
         return why
-    t["onix_merge"] = {"sha": res["sha"], "base": res["base"], "at": res["at"]}
+    t["onix_merge"] = {"sha": res["sha"], "base": res["base"], "at": res["at"],
+                       **({"remote": res.get("remote") or "rad", "patch": res["radicle"]["patch"]} if res.get("radicle") else {}),
+                       **({"mirror": res["mirror"]} if res.get("mirror") else {})}
     t.pop("attention", None)
     t["merged"] = True
     finish(s, t, even_if_busy=True)
@@ -797,6 +809,18 @@ def finalize(s, t):
         msg = (f"{s.ref(t)} is ready: pull request #{pr['number']}, {pr['url']}. It shows Working until its checks "
                "pass and GitHub says it can merge; a failing check or a conflict comes back to you to fix.")
     if onix.mode(s):
+        # onix: with onix.radicle the work goes out as a Radicle patch now (radicle.py), the patch Accept
+        # merges; a patch that couldn't open is said, as a pull request that couldn't
+        via = radicle.mode(onix.onix_settings(s, t.get("space")), s.loc["folder"])
+        if via:
+            with released(s):
+                rec, why = radicle.push_patch(s, t, branch_tip(s, t))
+            if why:
+                t["attention"] = why
+                return f"{s.ref(t)} {READY_BUT} {why} Tell the person."
+            t["radicle"] = rec
+            msg = f"{s.ref(t)} is ready: Radicle patch {rec['patch'][:7]}" + (
+                " (this machine's Radicle node isn't running: the patch is announced once it runs)." if rec.get("offline") else ".")
         # onix: no pull request to open or wait on; Settings' merge policy decides whether Herdr
         # fast-forwards the base and pushes it now (a Cairn FAIL, just recorded, stops it).
         policy = merge_policy(s, t)
@@ -805,7 +829,9 @@ def finalize(s, t):
             error = onix_merge_now(s, t)
             return msg + (f" Merging it waits: {error}" if error else " Merged; done.")
         t.pop("auto_merge", None)
-        return msg + (f" The person accepts it in the Tasks panel: it fast-forwards {t.get('base') or 'main'} "
+        return msg + (f" The person accepts it in the Tasks panel: it merges the patch (fast-forwards {t.get('base') or 'main'} "
+                      "and pushes it to rad, then origin)." if via else
+                      f" The person accepts it in the Tasks panel: it fast-forwards {t.get('base') or 'main'} "
                       "and pushes it to origin (no pull request).")
     policy = merge_policy(s, t)
     if policy in ("auto", "checks"):

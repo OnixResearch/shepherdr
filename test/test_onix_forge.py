@@ -68,7 +68,10 @@ printf '{"schema_version":"cairn.cli-machine.v1","ok":true,"command":"gate","exi
 """
 
 
-class OnixForge(unittest.TestCase):
+class OnixRepo(unittest.TestCase):
+    """Throwaway origin and clone, a test's own task list and settings, and herdr-task's commands in
+    process: the fixtures (test_onix_radicle.py builds on them too)."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="onix-forge-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -192,6 +195,8 @@ class OnixForge(unittest.TestCase):
         self.assertEqual(caught.exception.code, 1)
         return json.loads(out.getvalue())["error"]
 
+
+class OnixForge(OnixRepo):
     # ---- which forge a repo uses ----------------------------------------------------------
 
     def test_the_forge_comes_from_cairn_the_remote_or_the_setting(self):

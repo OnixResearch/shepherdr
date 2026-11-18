@@ -32,6 +32,8 @@ type Evidence = {
   forge?: 'github' | 'onix'
   base?: string
   cairn?: { change?: string | null; gates?: Record<string, string>; valid?: boolean | null; why?: string }
+  // onix: the task's Radicle patch (herdr-task's radicle.py), which Accept merges
+  radicle?: { patch: string; rid?: string; state?: string | null; offline?: boolean }
 }
 type Shown = { ref: string; title: string; state: string; status_text?: string; accepted_at?: number; evidence?: Evidence }
 
@@ -201,7 +203,7 @@ export function AcceptCard() {
   // what follows the summary (and the proof, when it shows in the card)
   const rest = (
     <>
-      {e.forge === 'onix' && e.merges !== false ? <p className="text-[0.8125rem] text-fg3">{A.ACCEPT.onixMerge(e.base ?? 'main')}</p> : null}
+      {e.forge === 'onix' && e.merges !== false ? <p className="text-[0.8125rem] text-fg3">{A.ACCEPT.onixMerge(e.base ?? 'main', e.radicle)}</p> : null}
       <Section label={A.ACCEPT.changes}><Changes e={e} /></Section>
       <Section label={A.ACCEPT.checks}>
         <p className="flex items-center gap-2">

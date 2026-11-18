@@ -16,6 +16,9 @@ tasks <slug>` and `validate`. `ok` only means it ran: the gate's `.result.verdic
 and validate's `.result.valid` are what count. A FAIL stops a merge; an error (no cairn here, a
 policy skew) is `unknown` with why: never blocking, never read as PASS. Cairn's own sync/archive
 are never run: only the read-only gates and validate.
+
+With `onix.radicle` the work goes out as a Radicle patch instead (radicle.py): the same merge, on
+the repo's rad remote, the patch given the merged commit first, then the base pushed to origin too.
 """
 
 import json
@@ -24,6 +27,7 @@ import re
 import shlex
 import subprocess
 
+from . import radicle
 from .base import Fail, git, now
 from .settings import settings_layers
 
@@ -229,24 +233,37 @@ def gate_failures(record):
 
 # ---- the Onix merge ------------------------------------------------------------------------
 
-def merge(s, t):
+def merge(s, t, space=None):
     """Lands the task's branch on its base the Onix way, no pull request: fetch, the branch must
     hold origin/<base> (a clean worktree is rebased onto it, anything else stops), the base branch
     here fast-forwards to the branch, `<base>` is pushed to origin (never forced), and origin is
     asked whether it holds the commit. Returns {ok, base} plus sha and at when it merged, else why
-    (and never a half-rebased worktree: a failed rebase is aborted)."""
+    (and never a half-rebased worktree: a failed rebase is aborted).
+    With onix.radicle (radicle.py) the remote is the repo's rad remote and only a delegate merges:
+    the task's patch gets the commit before the base moves, and origin gets the base after rad. The
+    patch's record comes back as `radicle` (and origin's push as `mirror`): the caller keeps it on the
+    task, since the merge runs with the task list let go."""
     main = s.loc["folder"]
     base = t.get("base") or "main"
     branch = t.get("branch")
     wt = t.get("worktree") or ""
     wt_here = bool(wt) and os.path.isdir(wt)
-    remote = remote_of(main)
-    out = {"ok": False, "base": base}
+    via = radicle.mode(onix_settings(s, space or t.get("space")), main)
+    remote = (radicle.rad_remote(main) or "rad") if via else remote_of(main)
+    out = {"ok": False, "base": base, **({"remote": remote} if via else {})}
     if not branch:
         return {**out, "why": "it has no branch to merge"}
     names = git(main, "remote")[1].split()
     if remote not in names:
+        if via:
+            return {**out, "why": f"onix.radicle wants a Radicle patch, but this repo has no rad:// remote to push {base} to"}
         return {**out, "why": f"there is no {remote} remote here to push {base} to"}
+    if via:
+        # Only a delegate's push moves the canonical branch: anyone else's would land nowhere.
+        mine, why = radicle.delegate_here(main)
+        if not mine:
+            patch = ((t.get("radicle") or {}).get("patch") or "")[:7]
+            return {**out, "why": f"{why}: " + (f"Radicle patch {patch} stays open for them" if patch else "a delegate merges it")}
     ok, _, err = git(main, "fetch", remote)
     if not ok:
         return {**out, "why": f"couldn't fetch {remote}: {last_line(err)}"}
@@ -282,6 +299,14 @@ def merge(s, t):
         if not sha or not git(main, "merge-base", "--is-ancestor", origin, sha)[0]:
             return {**out, "why": f"{branch} still doesn't hold {remote}/{base} after rebasing"}
     out["sha"] = sha
+    rec = None
+    if via:
+        # The patch holds exactly what lands (a rebase made a new commit): Radicle counts it merged
+        # when the canonical base reaches its head.
+        rec, why = radicle.push_patch(s, t, sha)
+        if why:
+            return {**out, "why": why}
+        out["radicle"] = rec
     got, cur, _ = git(main, "symbolic-ref", "--short", "HEAD")
     if got and cur == base:
         got, said, err = git(main, "merge", "--ff-only", sha)
@@ -304,5 +329,12 @@ def merge(s, t):
     git(main, "fetch", remote, base)
     if not git(main, "merge-base", "--is-ancestor", sha, origin)[0]:
         return {**out, "why": f"{remote}/{base} doesn't have {sha[:7]} after the push"}
+    if via:
+        out["radicle"] = radicle.landed(main, rec, sha)
+        mirror = "origin"
+        if mirror != remote and mirror in names:
+            # origin (a GitHub mirror) in step with the canonical base; its failure is said, the merge stands
+            got, said, err = git(main, "push", mirror, f"refs/heads/{base}:refs/heads/{base}")
+            out["mirror"] = {"remote": mirror, "ok": got, **({} if got else {"why": last_line(err or said)})}
     out.update(ok=True, at=now())
     return out
