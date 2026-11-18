@@ -4,7 +4,8 @@
 // DEFAULTS there and here.
 // Shared core: the source is core/settings.js; bin/sync-shared copies it into the mods in lib/COPIES.
 // onix: omp's catalog and its providers setting come from core/agents.js
-import { NAMES, levelName, current, rowFor, menuFor, permAcross, speedName, speedFor, OMP_PROVIDERS, ompProviders } from "./agents.js";
+import { NAMES, levelName, current, rowFor, menuFor, permAcross, speedName, speedFor, OMP_PROVIDERS, ompProviders,
+  UNDERCLASS_CLIS, underclassOf } from "./agents.js";
 import { SERVE } from "./host.js";
 
 // ---- the frame -------------------------------------------------------------------------------------------------
@@ -132,6 +133,10 @@ export function backupProblem(checks, m, cli) {
   return here.filter(([, c]) => c?.[cli] === "missing" || c?.[cli] === "signed-out")
     .map(([k, c]) => `Can't on ${k || "this computer"}: ${NAMES[cli] ?? cli} is ${c[cli] === "missing" ? "not installed" : "signed out"}.`).join(" ");
 }
+// onix: the backup row's problem with a CLI sent through the Underclass pool: its own sign-in doesn't count
+export const backupProblemFor = (checks, m, cli, file) =>
+  (underclassOf(file)[cli] ? backupProblem(Object.fromEntries(Object.entries(checks ?? {})
+    .map(([k, c]) => [k, c?.[cli] === "signed-out" ? { ...c, [cli]: "ready" } : c])), m, cli) : backupProblem(checks, m, cli));
 
 // The model menu's words (mods/chat-models, settings mode) and its button's: "Opus 5.5 · 1M · High".
 // the model list's headings come from core/agents.js modelSections (Pinned, Recent, Models)
@@ -185,6 +190,23 @@ export function ompProvidersFrom(text) {
   if (words.some((x) => !/^[a-z0-9][a-z0-9_-]*$/.test(x))) return null;
   return [...new Set(words)];
 }
+
+// onix: the Everywhere setting onix.underclass
+// ---- Claude Code and Codex through the Underclass pool ------------------------------------------------------------
+// Whether Shepherdr starts each of these CLIs on the Underclass pool's proxy instead of its own sign-in (agents.js
+// underclassOf: Everywhere's onix.underclass, a list of CLIs). A switch per CLI, on the window's Agents page and the
+// web's; herdr-task's underclass.py reads the same value for the agents it starts.
+export const UNDERCLASS = {
+  title: { claude: "Claude Code through Underclass", codex: "Codex through Underclass" },
+  about: {
+    claude: "Claude Code agents use the Underclass pool instead of this computer's own sign-in. Everywhere's, for every space.",
+    codex: "Codex agents use the Underclass pool instead of this computer's own sign-in. Everywhere's, for every space.",
+  },
+};
+/** The CLIs a settings file sends through the pool, in UNDERCLASS_CLIS's order. */
+export const underclassList = (file) => UNDERCLASS_CLIS.filter((c) => underclassOf(file)[c]);
+/** That list with `cli` switched on or off. */
+export const underclassWith = (list, cli, on) => UNDERCLASS_CLIS.filter((c) => (c === cli ? on : list.includes(c)));
 // What a role's model button starts from: its own choice, else for the Reviewer the other CLI, else the defaults.
 export function roleSel(role, own, choices, worker) {
   if (own) return { sel: { ...own }, unset: false };

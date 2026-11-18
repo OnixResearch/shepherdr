@@ -174,19 +174,23 @@ def worktrees_on(s, space=None):
 
 def argv_for(pick):
     """How to start an agent from a role's settings {agent, model, effort, fast, perm} (or its own
-    argv), as the chat's agent picker builds it (mods/chat/agent.js argvFor). None: no setting."""
+    argv), as the chat's agent picker builds it (mods/chat/agent.js argvFor). None: no setting.
+    onix: pick's `underclass` (the pool's address) sends Claude Code or Codex through Underclass."""
     if not pick:
         return None
     if pick.get("argv"):
         return [str(x) for x in pick["argv"]]
     agent = pick.get("agent")
+    pool = pick.get("underclass") if agent in ("claude", "codex") else None
+    if pool:
+        from . import underclass  # onix: imported here, underclass.py imports this module
     if agent == "claude":
         a = ["claude"]
         if pick.get("model"):
             a += ["--model", pick["model"]]
         if pick.get("effort"):
             a += ["--effort", pick["effort"]]
-        a += ["--settings", json.dumps({"fastMode": bool(pick.get("fast"))})]
+        a += ["--settings", json.dumps({"fastMode": bool(pick.get("fast")), **(underclass.claude_settings(pool) if pool else {})})]
         perm = pick.get("perm")
         if perm == "bypassPermissions":
             a.append("--dangerously-skip-permissions")
@@ -195,6 +199,8 @@ def argv_for(pick):
         return a
     if agent == "codex":
         a = ["codex", "--no-daemon"]
+        if pool:
+            a += underclass.codex_args(pool)
         if pick.get("model"):
             a += ["-m", pick["model"]]
         if pick.get("effort"):
@@ -255,6 +261,10 @@ def worker_argv(s, task, space=None, agent=None):
         return argv_for(pick)
     pick.pop("argv", None)
     pick.setdefault("agent", "claude")
+    # onix: Claude Code and Codex through the Underclass pool when Settings say so (underclass.py)
+    if pick["agent"] in ("claude", "codex"):
+        from . import underclass
+        pick["underclass"] = underclass.routed(pick["agent"])
     return argv_for(pick) or agent_argv(pick["agent"])
 
 
@@ -458,7 +468,7 @@ def trust_roots(folder):
     return out
 
 
-def reviewer_command(who, model=None, effort=None, folder=None):
+def reviewer_command(who, model=None, effort=None, folder=None, pool=None):
     """The command a worker starts its reviewer with (the brief's Reviewer line): read-only, and for
     Codex on its own app server (--no-daemon, as task agents run: a shared one can keep a sign-in
     since replaced, and every turn then fails, #745). Codex would first stop on its own screens,
@@ -466,16 +476,21 @@ def reviewer_command(who, model=None, effort=None, folder=None):
     folder and its repository's root are trusted for this run only, as a table: a dotted
     projects."<path>" key breaks on a dot in the path, as in ~/.local) and "Hooks need review"
     when a hook is new or changed (hooks off: a read-only reviewer needs none, and they would run
-    outside its sandbox)."""
+    outside its sandbox). onix: `pool` (the Underclass pool's address) sends Claude Code or Codex
+    through it (underclass.py)."""
+    if pool:
+        from . import underclass
     if who == "codex":
         a = ["codex", "--no-daemon", "--sandbox", "read-only", "--ask-for-approval", "never", "--disable", "hooks"]
         roots = trust_roots(folder)
         if roots:
             a += ["-c", "projects={" + ",".join(f'{json.dumps(r)}={{trust_level="trusted"}}' for r in roots) + "}"]
+        a += underclass.codex_args(pool) if pool else []
         a += ["-m", model] if model else []
         a += ["-c", f'model_reasoning_effort="{effort}"'] if effort else []
     elif who == "claude":
         a = ["claude", "--permission-mode", "plan"]
+        a += ["--settings", json.dumps(underclass.claude_settings(pool), separators=(",", ":"))] if pool else []
         a += ["--model", model] if model else []
         a += ["--effort", effort] if effort else []
     elif who == "omp":
@@ -541,21 +556,26 @@ def task_settings(s, t, space=None, argv=None, live=False):
         other = {"claude": "codex", "codex": "claude"}.get(agent)
         want = rv.get("agent") or (other if other and shutil.which(other) else agent)
         who, said = want, ""
-        if want != agent and cli_here(want) == "signed-out":
+        # onix: a CLI sent through the Underclass pool needs no sign-in of its own here, nor its account's models
+        from . import underclass
+        pooled = underclass.clis()
+        if want != agent and cli_here(want) == "signed-out" and want not in pooled:
             # Signed out here, it would sit at its sign-in screen and never review (#745): the task's own CLI does.
             who, rv = agent, {}
-        elif want == "codex" and want != agent and live:
+        elif want == "codex" and want != agent and live and want not in pooled:
             # #947: the periodic check can't read every answer (an unreadable auth file says an error, not "Not logged
             # in"), so a brief asks Codex now; anything but signed in would leave the reviewer on its sign-in screen
             ok, said = codex_login_now()
             if ok is False:
                 who, rv = agent, {}
         # #948: a model Codex here doesn't offer this account stops it at once: its own default instead, said
-        lacks = codex_lacks(rv.get("model")) if who == "codex" else None
+        lacks = codex_lacks(rv.get("model")) if who == "codex" and who not in pooled else None
         dropped = rv.get("model")
         if lacks:
             rv = {k: v for k, v in rv.items() if k != "model"}
         text = who + (f", model {rv['model']}" if rv.get("model") else "") + (f", effort {rv['effort']}" if rv.get("effort") else "")
+        if who in pooled:
+            text += " (through the Underclass pool)"
         if lacks:
             text += (f" (Codex's own default model: Codex here doesn't offer {dropped} "
                      "for the account it is signed in with)")
@@ -566,7 +586,7 @@ def task_settings(s, t, space=None, argv=None, live=False):
         elif not rv.get("agent"):
             text += " (the other CLI)" if who != agent else " (your own CLI: no other is installed)"
         folder = t.get("worktree") or getattr(s, "loc", {}).get("folder")
-        cmd = reviewer_command(who, rv.get("model"), rv.get("effort"), folder)
+        cmd = reviewer_command(who, rv.get("model"), rv.get("effort"), folder, underclass.routed(who))
         if cmd:
             text += f"; start it as `{cmd}`"
         add("Reviewer", text, {"agent": who, "model": rv.get("model"), "effort": rv.get("effort"), "command": cmd}, rv_by)

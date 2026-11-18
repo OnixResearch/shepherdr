@@ -261,6 +261,47 @@ export function parseOmpModels(json, providers = OMP_PROVIDERS) {
     });
 }
 
+// onix: Claude Code and Codex through the Underclass pool (the Everywhere setting onix.underclass)
+// ---- the Underclass pool --------------------------------------------------------------------------------------
+// An agent sent through Underclass asks the pool's proxy instead of its own sign-in: Claude Code gets the proxy's
+// address and an apiKeyHelper in its --settings, Codex a model provider of its own (-c) on the proxy's Responses API.
+// Each reads the proxy key when it needs it from `herdr-task underclass-key` on its own machine, so no key is in an
+// argv. herdr-task's underclass.py builds the same flags for the agents it starts (workers, reviewers, backups).
+export const UNDERCLASS_CLIS = ["claude", "codex"];
+export const UNDERCLASS_URL = "http://127.0.0.1:8080";
+const UC_KEY = ["herdr-task", "underclass-key"];
+const ucBase = (url) => String(url || UNDERCLASS_URL).replace(/\/+$/, "");
+/** A settings file's Underclass choice: { claude, codex }, each the pool's address when that CLI goes through it, else
+ *  false. Everywhere's onix.underclass (a list of CLIs) and onix.underclass_url (an http(s) address, else the default). */
+export function underclassOf(file) {
+  const onix = file?.everywhere?.onix ?? {};
+  const list = Array.isArray(onix.underclass) ? onix.underclass.map((x) => String(x).trim().toLowerCase()) : [];
+  const raw = typeof onix.underclass_url === "string" ? onix.underclass_url.trim() : "";
+  const url = ucBase(/^https?:\/\//.test(raw) ? raw : UNDERCLASS_URL);
+  return Object.fromEntries(UNDERCLASS_CLIS.map((c) => [c, list.includes(c) ? url : false]));
+}
+/** pick ({agent, model, …}) with the settings file's Underclass choice for its CLI, for argvFor; any other CLI's as it is. */
+export const withUnderclass = (pick, file) =>
+  (pick && UNDERCLASS_CLIS.includes(pick.agent) ? { ...pick, underclass: underclassOf(file)[pick.agent] } : pick);
+// Claude Code's --settings keys, and Codex's -c overrides, that send it through the pool at url.
+const ucClaude = (url) => ({ apiKeyHelper: UC_KEY.join(" "), env: { ANTHROPIC_BASE_URL: ucBase(url) } });
+const ucCodex = (url) => ["-c", `model_provider="underclass"`, "-c",
+  `model_providers.underclass={name="Underclass",base_url=${JSON.stringify(`${ucBase(url)}/v1`)},wire_api="responses",auth={command="${UC_KEY[0]}",args=["${UC_KEY[1]}"]}}`];
+/** The pool's address an agent's argv goes through, else null: a resume, a fork or a switch keeps it. */
+export function underclassIn(kind, argv) {
+  argv = argv ?? [];
+  if (kind === "claude") {
+    let s = null;
+    try { s = JSON.parse(flag(argv, "--settings") ?? "null"); } catch {}
+    return s?.apiKeyHelper === UC_KEY.join(" ") ? ucBase(s?.env?.ANTHROPIC_BASE_URL) : null;
+  }
+  if (kind !== "codex") return null;
+  const o = overrides(argv);
+  if (o.model_provider !== "underclass") return null;
+  const m = /base_url="([^"]+)"/.exec(o["model_providers.underclass"] ?? "");
+  return ucBase(m ? m[1].replace(/\/v1\/?$/, "") : UNDERCLASS_URL);
+}
+
 // The person's picks in the model menus (the window's and the web's alike), in PICKS_FILE under the
 // home of the machine the menu runs on: { pinned: ["codex:gpt-6-sol"], recent: [...] }, recent newest first.
 export const PICKS_FILE = ".herdr/model-picks.json";
@@ -410,7 +451,8 @@ function kept(kind, argv) {
       if (i === 0 && (a === "resume" || a === "fork")) { if (rest[1] && !rest[1].startsWith("-")) i++; continue; }
       if (a === "--no-daemon" || a === "--dangerously-bypass-approvals-and-sandbox" || a === "--full-auto") continue;
       if (["-m", "--model", "-s", "--sandbox", "-a", "--ask-for-approval"].includes(a)) { i++; continue; }
-      if ((a === "-c" || a === "--config") && /^(model|model_reasoning_effort|service_tier)=/.test(rest[i + 1] ?? "")) { i++; continue; }
+      // onix: the Underclass provider too (argvFor says it again, or not, as the pick says)
+      if ((a === "-c" || a === "--config") && /^(model|model_reasoning_effort|service_tier|model_provider|model_providers\.underclass)=/.test(rest[i + 1] ?? "")) { i++; continue; }
       if (CODEX_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
       if (a.startsWith("-")) out.push(a);
     }
@@ -467,11 +509,14 @@ function stripSession(kind, argv) {
 export function argvFor(pick, old) {
   const same = pick.agent === old.agent;
   const flags = same ? kept(pick.agent, old.argv ?? []) : [];
+  // onix: through the Underclass pool as the pick says (pick.underclass: the pool's address, or false), else as the
+  // same agent went before (a pick that doesn't say keeps it)
+  const pool = pick.underclass !== undefined ? pick.underclass || null : same ? underclassIn(pick.agent, old.argv ?? []) : null;
   if (pick.agent === "claude") {
     const a = ["claude", ...flags];
     if (pick.model) a.push("--model", pick.model);
     if (pick.effort) a.push("--effort", pick.effort);
-    a.push("--settings", JSON.stringify({ fastMode: Boolean(pick.fast) }));
+    a.push("--settings", JSON.stringify({ fastMode: Boolean(pick.fast), ...(pool ? ucClaude(pool) : {}) }));
     if (pick.perm === "bypassPermissions") a.push("--dangerously-skip-permissions");
     else if (pick.perm) a.push("--permission-mode", pick.perm === "manual" ? "default" : pick.perm);
     if (same && old.session) return { argv: [...a, "--resume", old.session], resume: true, base: a };
@@ -492,7 +537,7 @@ export function argvFor(pick, old) {
     return { argv: a, resume: false, base: a };
   }
   // Codex runs its commands outside hc without --no-daemon (as herdr-task and restart.sh add).
-  const a = [...flags, "--no-daemon"];
+  const a = [...flags, "--no-daemon", ...(pool ? ucCodex(pool) : [])];
   if (pick.model) a.push("-m", pick.model);
   if (pick.effort) a.push("-c", `model_reasoning_effort="${pick.effort}"`);
   // always said, so Fast off wins over a service_tier in config.toml (default: the standard tier)
@@ -540,7 +585,9 @@ export function forkArgv(kind, argv, session) {
     ? ["--model", "--effort", "--settings"].flatMap((f) => { const v = flag(argv, f); return v ? [f, v] : []; })
     : (() => {
       const m = flag(argv, "-m", "--model"), o = overrides(argv);
-      return [...(m ? ["-m", m] : []), "--no-daemon",
+      // onix: a conversation through the Underclass pool forks through it too
+      const pool = underclassIn(kind, argv);
+      return [...(m ? ["-m", m] : []), "--no-daemon", ...(pool ? ucCodex(pool) : []),
         ...["model_reasoning_effort", "service_tier"].flatMap((k) => (o[k] ? ["-c", `${k}="${o[k]}"`] : []))];
     })();
   const flags = [...kept(kind, argv), ...same];

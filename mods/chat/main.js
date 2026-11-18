@@ -1746,7 +1746,8 @@ export default class Chat extends View {
         const head = /^---\n([\s\S]*?)\n---\n?/.exec(src);
         const body = head ? src.slice(head[0].length) : src;
         const own = /^command:[ \t]*(.+)$/m.exec(head?.[1] ?? "")?.[1]?.trim();
-        const cmd = st?.agent && there ? agent.argvFor(st, { agent: null, argv: [] }).argv.map(q).join(" ") : own;
+        // onix: through the Underclass pool as Settings say (agent.underclassPick)
+        const cmd = st?.agent && there ? agent.argvFor(await agent.underclassPick(st), { agent: null, argv: [] }).argv.map(q).join(" ") : own;
         if (body.trim() && cmd) {
           words = body.trim();
           oneOff = `herdr-${template}-${Date.now().toString(36)}`;
@@ -2823,7 +2824,8 @@ export default class Chat extends View {
     cx.spawn(async (cx) => {
       try {
         const t = JSON.parse((await hc(["get", this.addr, "--json"])).stdout);
-        const built = agent.argvFor(pick, { agent: this.kind, argv: t.foreground?.argv ?? [], session: agent.sessionOf(this.kind, this.path) });
+        // onix: through the Underclass pool as Settings say (agent.underclassPick)
+        const built = agent.argvFor(await agent.underclassPick(pick), { agent: this.kind, argv: t.foreground?.argv ?? [], session: agent.sessionOf(this.kind, this.path) });
         this.swapping = true;
         const next = await agent.restart(t, built, mine);
         this.follow_to(next);
@@ -2853,7 +2855,8 @@ export default class Chat extends View {
         const ref = k?.id != null ? String(k.id) : t.labels?.["herdr.task"];
         const folder = k?.folder ?? t.foreground?.cwd ?? t.cwd;
         if (!ref || !folder) throw new Error("This chat's task wasn't found.");
-        const built = agent.argvFor(pick, { agent: this.kind, argv: t.foreground?.argv ?? [] });
+        // onix: through the Underclass pool as Settings say (agent.underclassPick)
+        const built = agent.argvFor(await agent.underclassPick(pick), { agent: this.kind, argv: t.foreground?.argv ?? [] });
         const on = k?.machine ?? this.machine;
         this.swapping = true;
         const cli = (a) => exec(`${appHome()}/mods/tasks/bin/herdr-task`, a);

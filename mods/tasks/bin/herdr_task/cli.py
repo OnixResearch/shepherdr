@@ -27,6 +27,7 @@ from .home import cmd_home
 from .assistant_settings import cmd_session_note
 from .feedback import cmd_feedback
 from .sandbox import cmd_sandbox
+from .underclass import cmd_underclass_key  # onix: the Underclass pool's key, for Claude Code and Codex
 
 
 # ---- another machine ------------------------------------------------------------------------
@@ -479,6 +480,10 @@ def main():
     c = cmd("sandbox", cmd_sandbox, "whether Codex's sandbox (bwrap) can start on this machine, and the fix for it when it can't "
             "(asked once and kept; --check asks again)", id=False)
     c.add_argument("--check", action="store_true", help="ask again now")
+    # onix: what Claude Code's apiKeyHelper and Codex's provider auth run on an agent sent through the Underclass pool
+    c = sub.add_parser("underclass-key", help="onix: print the Underclass pool's proxy key on this machine (for an agent's "
+                       "own key command: Claude Code's apiKeyHelper, Codex's provider auth)")
+    c.set_defaults(fn=cmd_underclass_key, json=False)
     c = sub.add_parser("_track")
     c.add_argument("id")
     c.add_argument("address")

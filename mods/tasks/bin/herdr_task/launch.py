@@ -286,10 +286,17 @@ def own_command(path, text, sandboxed=False):
 # A Codex worker's review (#866): its sandbox can't reach hc, so starting, waiting on, reading and
 # ending its reviewer run escalated. Only a read-only reviewer as the brief's Reviewer line gives it,
 # and only its own helpers (<task>-review, -helper) to wait on, read or end.
+# onix: a reviewer through the Underclass pool (underclass.py) adds only its own exact flags: the
+# pool's address and `herdr-task underclass-key` as the key's command, never another command.
+POOL_URL = r'"https?://[\w.:\[\]/-]+"'
 REVIEWERS = {"codex": (["codex", "--no-daemon", "--sandbox", "read-only", "--ask-for-approval", "never"],
                        {"--disable": re.compile(r"hooks"), "-m": re.compile(r"[\w.:-]+"),
-                        "-c": re.compile(r'projects=\{.*\}|model_reasoning_effort="?\w+"?', re.S)}),
-             "claude": (["claude", "--permission-mode", "plan"], {"--model": re.compile(r"[\w.:\[\]-]+"), "--effort": re.compile(r"\w+")}),
+                        "-c": re.compile(r'projects=\{.*\}|model_reasoning_effort="?\w+"?|model_provider="underclass"|'
+                                         r'model_providers\.underclass=\{name="Underclass",base_url=' + POOL_URL[:-1] + r'/v1",'
+                                         r'wire_api="responses",auth=\{command="herdr-task",args=\["underclass-key"\]\}\}', re.S)}),
+             "claude": (["claude", "--permission-mode", "plan"], {"--model": re.compile(r"[\w.:\[\]-]+"), "--effort": re.compile(r"\w+"),
+                                                                  "--settings": re.compile(r'\{"apiKeyHelper":"herdr-task underclass-key",'
+                                                                                           r'"env":\{"ANTHROPIC_BASE_URL":' + POOL_URL + r'\}\}')}),
              # onix: omp's reviewer reads freely and asks before any write or command (settings.reviewer_command).
              "omp": (["omp", "--approval-mode", "always-ask"],
                      {"--model": re.compile(r"[\w.:/\[\]-]+"), "--thinking": re.compile(r"\w+"),

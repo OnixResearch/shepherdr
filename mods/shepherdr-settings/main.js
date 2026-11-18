@@ -30,6 +30,8 @@ import { branchInit, branchRow } from "./branch-names.js";
 import { feedbackInit, feedbackRow, feedbackRepoRow } from "./feedback-repo.js";
 // onix: Agents > omp providers (which of omp's providers its models come from)
 import { ompProvidersInit, ompProvidersRow } from "./omp-providers.js";
+// onix: Agents > Claude Code / Codex through Underclass (the pool instead of their own sign-in)
+import { underclassRows } from "./underclass.js";
 import { autopilotInit, autopilotSection, autopilotFlush } from "./autopilot-section.js";
 import { spaceName } from "./core/spaces.js";
 import { NOTIFY, NOTIFY_DEFAULT, notifyMachine, notifyMachineOwn, notifyOf, notifyOwn, notifyEverywhere,
@@ -45,7 +47,7 @@ import { dirs } from "./dirs.js";
 // into its starting prompt; Herdr runs nothing itself.
 import { SECTIONS, ROLES, NOTES, MERGE, MUST_FIX, ROUNDS, ARCHIVE, ABOUT, BACKUP, REACTIONS, upgradeReactions, NOTIFY_ABOUT, TITLE, SPACE_TITLE,
   EVERYWHERE, CHANGED_HERE, RESET, EDIT_INSTRUCTIONS, USE_OTHER_CLI, LOADING_AGENTS, SAVED, sameAs as sameAsWords,
-  spacesOwn, otherCliWords, backupProblem, notifyMachineAbout, machineLabel, TASK_ROWS, LEVEL } from "./core/settings.js";
+  spacesOwn, otherCliWords, backupProblemFor, notifyMachineAbout, machineLabel, TASK_ROWS, LEVEL } from "./core/settings.js";
 
 const I = (name) => `mods/shepherdr-settings/${name}.svg`;
 // A page's title, and a Tasks row's (by its key, section.field).
@@ -494,7 +496,9 @@ export default class ShepherdrSettings extends View {
       .child(feedbackRow(this, t))
       .children([feedbackRepoRow(this, t)].filter(Boolean))
       // onix: Everywhere's omp providers, the same box pattern as the feedback repo above
-      .children([ompProvidersRow(this, t)].filter(Boolean));
+      .children([ompProvidersRow(this, t)].filter(Boolean))
+      // onix: Everywhere's switches for Claude Code and Codex through the Underclass pool
+      .children(underclassRows(this, t));
   }
 
   // A role: its model button and, on Everywhere, "Edit instructions" (the same for every space).
@@ -529,7 +533,8 @@ export default class ShepherdrSettings extends View {
     const other = value && value !== "off" ? value : this.otherCli();
     // The machines this scope reaches (the check names this computer ""): all of them for Everywhere.
     const m = this.scope ? machineOfSpace(this.scope) : null;
-    const problem = on ? backupProblem(this.clis, m, other) : "";
+    // onix: a CLI through the Underclass pool needs no sign-in of its own (backupProblemFor)
+    const problem = on ? backupProblemFor(this.clis, m, other, this.cfg) : "";
     const about = BACKUP.about;
     // Turning it on follows what it would get anyway when that is on, else names the other CLI.
     const flip = (_next, _e, cx) => {

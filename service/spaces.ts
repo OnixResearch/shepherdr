@@ -4,15 +4,16 @@
 // "spaces"), each with an Assistant started here from the assistant template, labelled as the window labels one.
 // Folders for the New space dialog are read on the space's machine (no hidden ones; a repo is a folder with .git); its
 // words and rules are core/newspace.js, the window's New space's too.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hub } from "./hub.ts";
-import { HOME } from "./paths.ts";
+import { HOME, settingsFile } from "./paths.ts";
 import { exec } from "./model.ts";
 import * as NS from "../core/newspace.js";
 import * as SP from "../core/spaces.js";
 import { AGENT_PATH, cleanCommand } from "../core/clean-env.js";
-import { argvFor, NAMES } from "../core/agents.js";
+// onix: withUnderclass, Claude Code and Codex through the Underclass pool as Settings say
+import { argvFor, NAMES, withUnderclass } from "../core/agents.js";
 
 export const withWindow = () => existsSync(join(process.env.HERDR_APP_HOME || join(HOME, ".config", "herdr-app"), "mods", "spaces-chat"));
 
@@ -81,7 +82,9 @@ export async function execTemplate(hub: Hub, name: string, machine: string | nul
   let cmd = own;
   // onix: omp too: its argv is its own word first (never wrapped in env or sh), the model as provider/id
   if (pick?.agent === "claude" || pick?.agent === "codex" || pick?.agent === "omp") {
-    if (await has(pick.agent)) cmd = argvFor(pick, { agent: null, argv: [] }).argv.map(shellWord).join(" ");
+    let file: unknown = {};
+    try { file = JSON.parse(readFileSync(settingsFile(), "utf8")) ?? {}; } catch {}
+    if (await has(pick.agent)) cmd = argvFor(withUnderclass(pick, file), { agent: null, argv: [] }).argv.map(shellWord).join(" ");
     else if (!(await has(own.split(/\s+/)[0]))) {
       throw new Error(`${(NAMES as Record<string, string>)[pick.agent] ?? pick.agent} isn't installed on ${machine ?? "this computer"}. Install it, or pick another agent for the Assistant in Settings › Agents.`);
     }

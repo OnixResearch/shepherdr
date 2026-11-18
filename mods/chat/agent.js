@@ -10,7 +10,7 @@
 import { exec, hc, appHome } from "herdr";
 // The rules (names, menus, argv) are core/agents.js, shared with the web app.
 // onix: omp's catalog and providers (core/agents.js)
-import { DEFAULTS, parseDefaults, parseOmpModels, ompProviders } from "./core/agents.js";
+import { DEFAULTS, parseDefaults, parseOmpModels, ompProviders, withUnderclass } from "./core/agents.js";
 import { SH } from "./core/paths.js";
 import { chatLabel } from "./core/spaces.js";
 export * from "./core/agents.js";
@@ -42,6 +42,16 @@ export async function ompModels(machine = null) {
   const models = read.length ? read : was?.models ?? [];
   ompSeen.set(key, { at: Date.now(), models });
   return models;
+}
+
+// onix: Claude Code and Codex through the Underclass pool (core/agents.js withUnderclass)
+// pick with Shepherdr's settings' Underclass choice for its CLI (Everywhere's onix.underclass), for argvFor: read
+// each time, so a switch follows Settings. An unreadable file leaves the pick as it is (argvFor keeps the old way).
+export async function underclassPick(pick) {
+  const s = await exec("sh", ["-c", `${SH}cat "$SHEP_SETTINGS"`]).catch(() => null);
+  let file = null;
+  try { file = JSON.parse(s?.stdout || "null"); } catch {}
+  return file ? withUnderclass(pick, file) : pick;
 }
 
 // Restarts the agent `t` (hc get's record) with `argv`, parked behind chat pane `pane`.

@@ -14,8 +14,9 @@ import * as APc from "../core/autopilot.js";
 import type { SettingRow, SettingSection } from "../web/shared/types.ts";
 
 const { TASK_ROWS, DEFAULTS, wordFor, valueFor, ROLES: CORE_ROLES, NOTES: CORE_NOTES, ABOUT, BACKUP, REACTIONS, SUGGESTIONS, FEEDBACK, feedbackRepo, upgradeReactions, BASE, BRANCH, branchPattern, MACHINES, OLD_NAMES, SECTIONS,
-  WEB, modelLabel, roleSel, otherCli, otherCliWords, backupProblem, homeAbout, webState, fromWord, LOADING_AGENTS, RESET, machineLabel,
-  OMP_MODELS, ompProvidersOf, ompProvidersFrom } = C as any;   // onix: omp's providers row
+  WEB, modelLabel, roleSel, otherCli, otherCliWords, backupProblemFor, homeAbout, webState, fromWord, LOADING_AGENTS, RESET, machineLabel,
+  OMP_MODELS, ompProvidersOf, ompProvidersFrom,   // onix: omp's providers row
+  UNDERCLASS, underclassList, underclassWith } = C as any;   // onix: Claude Code and Codex through the Underclass pool
 const AP = APc as any;
 /** Autopilot as Everywhere has it now (herdr-task's view: what Settings keeps, else what it kept before, else the
  *  defaults): its schedule's words, events, heartbeat words and what wakes it in plain words */
@@ -210,7 +211,8 @@ export class Settings {
     // machine where the other CLI can't is one more line under it
     const b = this.pick(scope, "backup", "agent");
     const on = b.value !== "off";
-    const problem = on ? backupProblem(this.checks, s ? b.machine : null, b.value && b.value !== "off" ? b.value : otherCli(worker)) : "";
+    // onix: a CLI through the Underclass pool needs no sign-in of its own (backupProblemFor)
+    const problem = on ? backupProblemFor(this.checks, s ? b.machine : null, b.value && b.value !== "off" ? b.value : otherCli(worker), this.file) : "";
     rows.push({ label: BACKUP.title, key: "backup.agent", value: ON(on), options: ["on", "off"], hint: problem ? `${BACKUP.about}\n${problem}` : BACKUP.about,
       ...this.follows(s, b, (v) => ON(v !== "off"), "backup", "agent") });
     // Reactions, for every agent: each reacts to some of your messages with an emoji (herdr-task's reactions.py)
@@ -234,6 +236,12 @@ export class Settings {
       // omp's models come from these providers only (onix.omp_providers): Everywhere's, like the feedback repo
       rows.push({ label: OMP_MODELS.title, key: "onix.omp_providers", value: ompProvidersOf(this.file).join(", "), text: true,
         hint: OMP_MODELS.about, placeholder: OMP_MODELS.placeholder } as SettingRow);
+      // onix: Everywhere's switches for onix.underclass, one per CLI
+      const pooled: string[] = underclassList(this.file);
+      for (const cli of ["claude", "codex"]) {
+        rows.push({ label: UNDERCLASS.title[cli], key: `onix.underclass.${cli}`, value: ON(pooled.includes(cli)), options: ["on", "off"],
+          hint: UNDERCLASS.about[cli] } as SettingRow);
+      }
     }
     return { name: title("agents"), level: scope ?? "all", rows };
   }
@@ -502,6 +510,12 @@ export class Settings {
       const list: string[] | null = ompProvidersFrom(word);
       if (list === null) throw new Error(OMP_MODELS.bad);
       put("onix", "omp_providers", list.length ? list : null);
+    // onix: onix.underclass, Everywhere only: a CLI switched on or off in the list
+    } else if (key === "onix.underclass.claude" || key === "onix.underclass.codex") {
+      if (space) throw new Error("The Underclass pool is set for every space at once.");
+      if (word !== null && word !== "on" && word !== "off") throw new Error("Not one of its choices.");
+      const list: string[] = underclassWith(underclassList(file), key.split(".")[2], word === "on");
+      put("onix", "underclass", list.length ? list : null);
     } else if (key === "agents.feedback_repo") {
       // Everywhere's only: owner/name (a github.com link is made one); empty goes back to Shepherdr's own repo
       if (space) throw new Error("The feedback repo is set for every space at once.");

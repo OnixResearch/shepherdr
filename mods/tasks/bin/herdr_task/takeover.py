@@ -131,16 +131,23 @@ def backup_for(s, t, running):
     """(kind, why not): the CLI that takes over from `running`, or None with a few words."""
     pick = (settings_for(s, t.get("space")).get("backup") or {})
     want = pick.get("agent")
+    # onix: a CLI sent through the Underclass pool needs no sign-in of its own here (underclass.py)
+    from .underclass import clis
+    pooled = clis()
+
+    def usable(kind):
+        state = here_state(kind)
+        return state == "ready" or (kind in pooled and state == "signed-out")
     if want == "off":
         return None, "no backup"
     if want and want != running:
-        if want in NAMES and here_state(want) in ("missing", "signed-out"):
+        if want in NAMES and here_state(want) in ("missing", "signed-out") and not usable(want):
             return None, f"backup {'signed out' if here_state(want) == 'signed-out' else 'not installed'}"
         return want, None
     if want == running:
         return None, "no backup"
     other = {"claude": "codex", "codex": "claude"}.get(running)
-    if other and here_state(other) == "ready":
+    if other and usable(other):
         return other, None
     return None, "no backup"
 
@@ -151,7 +158,8 @@ def backup_argv(s, t, kind):
     pick = settings_for(s, t.get("space")).get("backup") or {}
     if pick.get("argv") and pick.get("agent") == kind:
         return [str(x) for x in pick["argv"]]
-    return argv_for({"agent": kind}) or list(AGENTS.get(kind, [kind]))
+    from .underclass import routed  # onix: through the Underclass pool when Settings say so
+    return argv_for({"agent": kind, "underclass": routed(kind)}) or list(AGENTS.get(kind, [kind]))
 
 
 TAIL = 524288

@@ -14,7 +14,12 @@ import { chatLabel } from "../core/spaces.js";
 import { kindOf } from "../core/chat-reader.js";
 import * as LS from "../core/live-switch.js";
 
-const { DEFAULTS, parseDefaults, parseOmpModels, ompProviders, current, menuFor, rowFor, argvFor, sessionOf, NAMES, line, PICKS_FILE, parsePicks, pickKey, withPin, withRecent, speedOf, speedWordOf } = AG as any;
+const { DEFAULTS, parseDefaults, parseOmpModels, ompProviders, current, menuFor, rowFor, argvFor, sessionOf, NAMES, line, PICKS_FILE, parsePicks, pickKey, withPin, withRecent, speedOf, speedWordOf,
+  withUnderclass } = AG as any;   // onix: withUnderclass, Claude Code and Codex through the Underclass pool
+/** onix: the settings file as it is now ({} when unreadable), for its Underclass choice (core/agents.js withUnderclass). */
+function settingsNow(): unknown {
+  try { return JSON.parse(readFileSync(settingsFile(), "utf8")) ?? {}; } catch { return {}; }
+}
 /** The agents Shepherdr starts, in the model menus' order. */
 // onix: omp is one of them (core/agents.js NAMES), its catalog read from `omp models --json`
 const KINDS = ["claude", "codex", "omp"];
@@ -227,7 +232,8 @@ export class Agents {
     if (!t || t.state !== "live") throw new Error("That agent isn't running.");
     const kind = kindOfTerm(t) ?? "claude";
     const old = { agent: kind, argv: t.foreground?.argv ?? t.argv ?? [], session: sessionOf(kind, reader?.path ?? null) };
-    const built = argvFor({ agent: pick.kind, model: pick.model, effort: pick.effort, fast: speedOf(pick.speed), perm: pick.perm ?? current(kind, old.argv, {}, {}).perm }, old);
+    // onix: through the Underclass pool as Settings say for that CLI
+    const built = argvFor(withUnderclass({ agent: pick.kind, model: pick.model, effort: pick.effort, fast: speedOf(pick.speed), perm: pick.perm ?? current(kind, old.argv, {}, {}).perm }, settingsNow()), old);
     const pane = t.labels?.["herdr.chat"] ?? "";
     const task = t.labels?.["herdr.task"];
     if (task) {
