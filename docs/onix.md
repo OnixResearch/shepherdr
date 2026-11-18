@@ -37,9 +37,14 @@ Pick omp in Shepherdr settings › Agents for any role, then its model (`undercl
   conversation shows only the live branch.
 - Resume uses `omp --resume <session>`, and a crashed agent comes back with `omp --restore <session>`. omp can't
   fork a session, so a fork is a handoff with the log.
-- **Limits of omp in Shepherdr:** omp has no read-only sandbox, so an omp reviewer is held back by its approval
-  mode and its instructions only. omp's questions and permission prompts are answered in its terminal, not on a
-  chat card; the task shows under Needs you meanwhile.
+- **Limits of omp in Shepherdr:** omp has no read-only sandbox. An omp reviewer starts with
+  `--approval-mode always-ask`: it reads freely and would ask before any write or command, so its instructions tell
+  it to run nothing and name the checks for its worker to run, as a Codex reviewer does for what its sandbox can't
+  run. omp's questions and permission prompts are answered in its terminal, not on a chat card; the task shows
+  under Needs you meanwhile.
+- Workers get their own `herdr-task` (and `herdr-secret`, `herdr-browser`) commands approved through a per-run
+  `--config` overlay of omp `bash.patterns`, the way Claude Code workers get allow rules, so Ask and Auto don't stop
+  a worker at its own status and ready calls.
 
 ## The Underclass pool and mesh-llm in plan limits
 

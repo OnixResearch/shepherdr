@@ -290,8 +290,8 @@ REVIEWERS = {"codex": (["codex", "--no-daemon", "--sandbox", "read-only", "--ask
                        {"--disable": re.compile(r"hooks"), "-m": re.compile(r"[\w.:-]+"),
                         "-c": re.compile(r'projects=\{.*\}|model_reasoning_effort="?\w+"?', re.S)}),
              "claude": (["claude", "--permission-mode", "plan"], {"--model": re.compile(r"[\w.:\[\]-]+"), "--effort": re.compile(r"\w+")}),
-             # onix: omp's reviewer asks before every read, write and exec (settings.reviewer_command).
-             "omp": (["omp", "--approval-mode", "always-ask-cached"],
+             # onix: omp's reviewer reads freely and asks before any write or command (settings.reviewer_command).
+             "omp": (["omp", "--approval-mode", "always-ask"],
                      {"--model": re.compile(r"[\w.:/\[\]-]+"), "--thinking": re.compile(r"\w+"),
                       "--approval-mode": re.compile(r"[\w-]+")})}
 HELPER = re.compile(r"[\w.-]+-(?:review|helper)(?:-[\w.-]+)?")

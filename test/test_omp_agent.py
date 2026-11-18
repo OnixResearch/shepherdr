@@ -103,10 +103,11 @@ class Settings(unittest.TestCase):
         self.assertEqual(settings.argv_model(["omp", "--model", "underclass/x", "--thinking", "xhigh",
                                               "--approval-mode", "write"]), ("underclass/x", "xhigh"))
 
-    def test_the_reviewer_command_is_ask_and_remember(self):
-        self.assertEqual(settings.reviewer_command("omp"), "omp --approval-mode always-ask-cached")
+    def test_the_reviewer_command_reads_freely_and_asks_before_anything_else(self):
+        # always-ask: read-only tools run unasked (an unattended reviewer reads the code), writes and commands ask.
+        self.assertEqual(settings.reviewer_command("omp"), "omp --approval-mode always-ask")
         self.assertEqual(settings.reviewer_command("omp", "mesh/spark", "medium"),
-                         shlex.join(["omp", "--approval-mode", "always-ask-cached", "--model", "mesh/spark", "--thinking", "medium"]))
+                         shlex.join(["omp", "--approval-mode", "always-ask", "--model", "mesh/spark", "--thinking", "medium"]))
 
     def test_a_task_agent_omp_start_from_settings(self):
         """--agent omp (no model, no effort) still says its approval mode, never omp's own yolo default."""
@@ -138,7 +139,7 @@ class Settings(unittest.TestCase):
                                           "set": {"review": "on"}}, None, ["omp", "--approval-mode", "write"])
         rv = next(x["value"] for x in lines if x["label"] == "Reviewer")
         self.assertEqual(rv["agent"], "omp")
-        self.assertEqual(rv["command"], "omp --approval-mode always-ask-cached")
+        self.assertEqual(rv["command"], "omp --approval-mode always-ask")
 
 
 class Launch(unittest.TestCase):
@@ -180,7 +181,7 @@ class Launch(unittest.TestCase):
 
     def test_the_helper_hc_line_accepts_an_omp_reviewer(self):
         words = shlex.split("hc run --bg --name dev-1-review --label herdr.role=reviewer --label herdr.agent=omp -- "
-                            "omp --approval-mode always-ask-cached --model underclass/deepseek-v4.1-flash "
+                            "omp --approval-mode always-ask --model underclass/deepseek-v4.1-flash "
                             "--thinking high 'review this'")
         self.assertTrue(launch.helper_hc(words))
         wide = shlex.split("hc run --bg --label herdr.agent=omp -- omp --approval-mode yolo 'do the task'")
