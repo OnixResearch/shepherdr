@@ -18,17 +18,19 @@ from .agents import agent_running, detail
 
 TABLE_FOR = 2.0          # seconds a read of the process table serves (a pass's agents, a list's tasks)
 _table = {"at": None, "children": {}}
+# Where the process table is read. Linux's /proc, unless a test points it at a fake tree of its own.
+PROC = "/proc"
 
 
 def _read_table():
     """{parent pid: [child pid, …]} of every process now, all as strings."""
     children = {}
-    if os.path.isdir("/proc/self"):
-        for n in os.listdir("/proc"):
+    if os.path.isdir(os.path.join(PROC, "self")):
+        for n in os.listdir(PROC):
             if not n.isdigit():
                 continue
             try:
-                with open(f"/proc/{n}/stat", "rb") as f:
+                with open(os.path.join(PROC, n, "stat"), "rb") as f:
                     stat = f.read()
                 # "pid (name) state ppid …": the name may hold spaces and brackets, so read after its last ")"
                 ppid = stat[stat.rindex(b")") + 2:].split(None, 2)[1].decode()
@@ -73,9 +75,87 @@ def kids(pid):
     return out
 
 
+# onix: omp keeps its session log open for the whole session, at
+# ~/.omp/agent/sessions/<cwd slug>/<ISO-ts>_<uuid>.jsonl (a subagent's own journal sits one folder
+# deeper, <that stem>/<name>.jsonl, and is never the task's). Its session id is the uuid after the last
+# "_". The slug is omp's session-paths.ts: inside the person's home, "-" and the home-relative path with
+# "/", "\" and ":" as "-" ("-git-onixos"); under the temp folder, "-tmp-…"; elsewhere, "--<path>--".
+OMP_SESSION = re.compile(r"/\.omp/agent/sessions/[^/]+/[^/]*_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
+OMP_ID = re.compile(r"_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
+
+
+def omp_dir(folder):
+    """omp's session folder name for a cwd (session-paths.ts's vi())."""
+    folder = os.path.realpath(folder or "")
+    for root, prefix in ((os.path.realpath("/tmp"), "-tmp"), (os.path.realpath(HOME), "-")):
+        rel = os.path.relpath(folder, root)
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            continue
+        rel = "" if rel == os.curdir else rel.replace("/", "-").replace("\\", "-").replace(":", "-")
+        return prefix + rel if not rel or prefix.endswith("-") else f"{prefix}-{rel}"
+    return "--" + re.sub(r"[/\\:]", "-", folder.lstrip("/")) + "--"
+
+
+def omp_sessions_dir(folder):
+    """Where omp keeps the sessions started in folder."""
+    return os.path.join(HOME, ".omp", "agent", "sessions", omp_dir(folder))
+
+
+def _open_files(p):
+    """The files process p has open: its /proc/<pid>/fd links (else lsof's)."""
+    files = []
+    fd = os.path.join(PROC, p, "fd")
+    if os.path.isdir(fd):
+        for n in os.listdir(fd):
+            try:
+                files.append(os.readlink(os.path.join(fd, n)))
+            except OSError:
+                pass
+    elif shutil.which("lsof"):
+        files = [l[1:] for l in run(["lsof", "-p", p, "-Fn"]).stdout.split("\n") if l.startswith("n")]
+    return files
+
+
+def omp_log(p, files):
+    """(session id, log path) of the omp process p, or None: the session file it holds open, else the
+    newest one in its cwd's session folder written since it started (a process whose fd it can't read)."""
+    for f in files:
+        m = OMP_SESSION.search(f)
+        if m:
+            return m.group(1), f
+    # Only an omp's: a claude or codex in the same folder must never take another agent's session.
+    try:
+        with open(os.path.join(PROC, p, "comm")) as f:
+            if not f.read().strip().startswith("omp"):
+                return None
+    except OSError:
+        return None
+    try:
+        cwd = os.readlink(os.path.join(PROC, p, "cwd"))
+        started = os.stat(os.path.join(PROC, p)).st_mtime * 1000
+    except OSError:
+        return None
+    best = None
+    d = omp_sessions_dir(cwd)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return None
+    for n in names:
+        f, m = os.path.join(d, n), OMP_ID.search(n)
+        try:
+            if not m or not os.path.isfile(f) or os.path.getmtime(f) * 1000 < started - LOOK_BACK_MS:
+                continue
+            if not best or os.path.getmtime(f) > best[0]:
+                best = (os.path.getmtime(f), m.group(1), f)
+        except OSError:
+            continue
+    return (best[1], best[2]) if best else None
+
+
 def session_of(pid):
     """(session id, log path) of the agent process pid (or a child), as mods/chat/log.js finds it:
-    Claude Code names its session in ~/.claude/sessions/<pid>.json; Codex holds its rollout open."""
+    Claude Code names its session in ~/.claude/sessions/<pid>.json; Codex and omp hold their log open."""
     for p in [str(pid)] + kids(pid):
         j = os.path.join(HOME, ".claude", "sessions", p + ".json")
         if os.path.isfile(j):
@@ -93,20 +173,14 @@ def session_of(pid):
                         log = f
                         break
                 return sid, log
-        files = []
-        fd = f"/proc/{p}/fd"
-        if os.path.isdir(fd):
-            for n in os.listdir(fd):
-                try:
-                    files.append(os.readlink(os.path.join(fd, n)))
-                except OSError:
-                    pass
-        elif shutil.which("lsof"):
-            files = [l[1:] for l in run(["lsof", "-p", p, "-Fn"]).stdout.split("\n") if l.startswith("n")]
+        files = _open_files(p)
         for f in files:
             m = re.search(r"/rollout-.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$", f)
             if m:
                 return m.group(1), f
+        found = omp_log(p, files)
+        if found:
+            return found
     return None, None
 
 
@@ -166,6 +240,11 @@ def _start(path):
                 p = o.get("payload") or {}
                 if o.get("type") == "session_meta":
                     at = at or _ms(p.get("timestamp") or o.get("timestamp"))
+                elif o.get("type") == "session":
+                    # onix: omp's header, then the first words to it as a message record
+                    at = at or _ms(o.get("timestamp"))
+                elif o.get("type") == "message" and (o.get("message") or {}).get("role") == "user":
+                    said = _words((o.get("message") or {}).get("content"))
                 elif o.get("type") == "user" and not o.get("isMeta"):
                     at = at or _ms(o.get("timestamp"))
                     said = _words((o.get("message") or {}).get("content"))
@@ -189,6 +268,9 @@ def log_by_session(kind, sid):
     import glob
     if kind == "codex":
         found = glob.glob(os.path.join(HOME, ".codex", "sessions", "*", "*", "*", f"rollout-*{sid}.jsonl"))
+    elif kind == "omp":
+        # onix: the session file's name ends "_<uuid>.jsonl", in the folder of the cwd it started in
+        found = glob.glob(os.path.join(HOME, ".omp", "agent", "sessions", "*", f"*_{sid}.jsonl"))
     else:
         found = glob.glob(os.path.join(HOME, ".claude", "projects", "*", sid + ".jsonl"))
     return found[0] if found else None
@@ -199,7 +281,7 @@ def find_log(a, ref, folders, taken=()):
     or None: by its session when it has one, else the earliest log of its kind that started from
     its launch on (until it ended) and whose first message names its task."""
     import glob
-    kind = "codex" if a.get("agent") == "codex" else "claude"
+    kind = "codex" if a.get("agent") == "codex" else "omp" if a.get("agent") == "omp" else "claude"
     if a.get("session"):
         return log_by_session(kind, a["session"])
     at = a.get("at")
@@ -210,6 +292,9 @@ def find_log(a, ref, folders, taken=()):
         import datetime
         days = {datetime.date.fromtimestamp((at + d) / 1000) for d in (-86400000, 0, 86400000)}
         files = [f for day in days for f in glob.glob(os.path.join(HOME, ".codex", "sessions", f"{day:%Y}", f"{day:%m}", f"{day:%d}", "rollout-*.jsonl"))]
+    elif kind == "omp":
+        files = [f for d in dict.fromkeys(x for x in folders if x)
+                 for f in glob.glob(os.path.join(omp_sessions_dir(d), "*.jsonl"))]
     else:
         files = [f for d in dict.fromkeys(x for x in folders if x) for f in glob.glob(os.path.join(project_dir(d), "*.jsonl"))]
     named = re.compile(rf"(?<![\w-]){re.escape(ref)}(?![\w-])")

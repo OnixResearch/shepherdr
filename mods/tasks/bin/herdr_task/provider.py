@@ -3,7 +3,7 @@
 import datetime
 import re
 
-from .agents import fit, from_person, log_tail, REASONS
+from .agents import fit, from_person, is_omp, log_tail, REASONS
 
 
 # ---- provider errors ------------------------------------------------------------------------
@@ -68,7 +68,26 @@ def provider_cut(log):
     cut, tries = None, 0
     for d in log_tail(log):
         p = d.get("payload") or {}
-        if d.get("type") == "assistant" and not d.get("isSidechain"):
+        if is_omp(d):
+            # onix: an omp turn the provider cut off is an assistant message with stopReason "error" and
+            # its errorMessage ("429 Too Many Requests", "401 This API key has expired…"), its errorStatus
+            # the HTTP status; any other assistant message is the turn that carried on.
+            m = d["message"]
+            if m.get("role") == "assistant" and m.get("stopReason") == "error" and m.get("errorMessage"):
+                tries += 1
+                cut = {"id": d.get("id") or d.get("timestamp") or str(tries), "text": str(m.get("errorMessage") or ""),
+                       "ts": d.get("timestamp"),
+                       "code": m.get("errorCode") if isinstance(m.get("errorCode"), str) else "",
+                       "status": m.get("errorStatus") if isinstance(m.get("errorStatus"), int) else 0}
+            elif m.get("role") == "assistant":
+                cut = None
+            else:
+                words = from_person(d)  # the person's words, or Herdr's carry-on nudge
+                if words is not None:
+                    cut = None
+                    if NUDGE_MARK not in words:
+                        tries = 0
+        elif d.get("type") == "assistant" and not d.get("isSidechain"):
             if d.get("isApiErrorMessage"):
                 c = (d.get("message") or {}).get("content") or []
                 text = "\n".join(x.get("text") or "" for x in c if isinstance(x, dict)) if isinstance(c, list) else str(c)
