@@ -48,8 +48,8 @@ Pick omp in Shepherdr settings › Agents for any role, then its model (`undercl
 
 ## The Underclass pool and mesh-llm in plan limits
 
-Turn the Other machines add-on on (Shepherdr settings › Window) to see plan limits. On each machine Shepherdr also
-reads, when they are there:
+Plan limits show on each machine's meter in the sidebar and in its details (Shepherdr reads them every 10 minutes).
+On each machine Shepherdr also reads, when they are there:
 
 - **Underclass:** the monitor socket (`/run/underclass/monitor.sock`, or `SHEPHERDR_UNDERCLASS_MONITOR`). For each
   backend (Codex, Claude, OpenCode Go) it shows the best account's headroom per window, so one spent account doesn't
