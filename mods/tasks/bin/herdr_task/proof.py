@@ -152,6 +152,10 @@ def evidence(s, t):
         "files": len(files), "added": sum(v[0] for v in files.values()), "removed": sum(v[1] for v in files.values()),
         "list": [{"path": p, "added": v[0], "removed": v[1]} for p, v in sorted(files.items(), key=lambda x: -(x[1][0] + x[1][1]))[:FEW]]}
     out["checks"] = checks_of(t)
+    # onix: an Onix repo's checks are Kiln's, run before the merge (kiln_check.py)
+    if out.get("forge") == "onix" and isinstance(t.get("kiln_check"), dict):
+        from .kiln_check import words
+        out["checks"] = words(t["kiln_check"])
     # What Accept does (cmd_accept): a worktree task's branch with work of its own is merged first; else only done.
     out["merges"] = bool(t.get("mode") == "worktree" and t.get("branch") and (t.get("pr") or commits))
     return out

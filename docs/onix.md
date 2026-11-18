@@ -1,19 +1,20 @@
 # The OnixResearch fork
 
 This fork of [eliasstravik/shepherdr](https://github.com/eliasstravik/shepherdr) runs Shepherdr on the
-OnixResearch stack: agents on omp with Underclass and mesh-llm models, the pool and the mesh in plan limits, and
-the OnixResearch repo rules (Cairn, fast-forward merges, Kiln). Everything else is upstream Shepherdr: install it,
-use it and update it the same way ([Install](install.md)).
+OnixResearch stack: agents on omp with Underclass and mesh-llm models (and Claude Code and Codex on the Underclass
+pool), the pool and the mesh in plan limits, and the OnixResearch repo rules (Cairn, fast-forward merges or Radicle
+patches, Kiln before and after a merge). Everything else is upstream Shepherdr: install it, use it and update it the
+same way ([Install](install.md)).
 
 ## What differs
 
 | | Upstream | This fork |
 |---|---|---|
 | Agent CLIs | Claude Code, Codex | Claude Code, Codex and **omp**, for the Assistant, workers, the reviewer and the backup agent |
-| Models | each CLI's own sign-in | for omp, any chat model omp knows from the providers you allow: `underclass/…` (the account pool) and `mesh/…` (mesh-llm) by default |
+| Models | each CLI's own sign-in | for omp, any chat model omp knows from the providers you allow: `underclass/…` (the account pool) and `mesh/…` (mesh-llm) by default; Claude Code and Codex on the **Underclass pool** instead of their own sign-in, when you switch it on |
 | Plan limits | Claude Code's `/usage`, Codex's rate limits | also the **Underclass pool** (headroom per backend, banked resets) and **mesh-llm** (models and peers) |
-| Merging | a pull request on GitHub, else a local merge | in an **Onix repo**: no pull request; after Accept, fast-forward the base branch and push it |
-| Checks | GitHub checks on the pull request | in an Onix repo: the linked **Cairn change's gates** at Ready, and **Kiln's CI** for the merged commit |
+| Merging | a pull request on GitHub, else a local merge | in an **Onix repo**: no pull request; after Accept, fast-forward the base branch and push it, or merge the task's **Radicle patch** |
+| Checks | GitHub checks on the pull request | in an Onix repo: the linked **Cairn change's gates** at Ready, **Kiln's CI** on the task before it merges, and Kiln's CI for the merged commit |
 | Keys | some panes keys in every layout | `Ctrl+K`, `Alt+Enter`, `Alt+Shift+Enter`, `Alt+Esc` and `Ctrl+Alt+arrows` only in the Shepherdr layout, so terminal programs keep them elsewhere |
 
 ## omp agents
@@ -46,6 +47,27 @@ Pick omp in Shepherdr settings › Agents for any role, then its model (`undercl
   `--config` overlay of omp `bash.patterns`, the way Claude Code workers get allow rules, so Ask and Auto don't stop
   a worker at its own status and ready calls.
 
+## Claude Code and Codex through the Underclass pool
+
+Settings › Agents › **Claude Code through Underclass** and **Codex through Underclass** (Everywhere's, the setting
+`onix.underclass`: a list of CLIs) start that CLI on the pool's proxy instead of this computer's own sign-in:
+the Assistant, workers, the reviewer and the backup agent alike.
+
+- Claude Code gets the proxy's address and an `apiKeyHelper` in its `--settings`
+  (`{"apiKeyHelper": "herdr-task underclass-key", "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8080"}}`). Codex gets
+  a model provider of its own on the proxy's Responses API
+  (`-c model_provider="underclass" -c model_providers.underclass={…, auth={command="herdr-task", args=["underclass-key"]}}`).
+- The key is read when the agent needs it, on the agent's own machine, by `herdr-task underclass-key`: the machine's
+  `onix.underclass_key_cmd` (a shell command printing it), else Everywhere's, else omp's own Underclass provider
+  (`~/.omp/agent/extensions/underclass/provider.json`, whose `apiKey` is such a command). No key is ever in an
+  argv, a template, a task or the settings file.
+- The address is `onix.underclass_url` (default `http://127.0.0.1:8080`, Underclass's own; a machine without the pool
+  reaches it through a tunnel on that port).
+- A pooled CLI needs no sign-in of its own: the reviewer pick and the backup agent don't fall back for one that is
+  signed out. Its model is the pool's: a Codex model the pool has no headroom for gets the pool's 429.
+- A resumed or forked conversation keeps going through the pool; a switch follows the setting. A Codex worker's
+  reviewer escalation admits only the pool's exact flags (its address and `herdr-task underclass-key`).
+
 ## The Underclass pool and mesh-llm in plan limits
 
 Plan limits show on each machine's meter in the sidebar and in its details (Shepherdr reads them every 10 minutes).
@@ -69,6 +91,16 @@ A task's repo is an **Onix repo** when it has a `.cairn/` folder or its `origin`
 - **Merging:** no pull request. On the person's Accept (or by itself when the Merge setting allows), Shepherdr
   fetches, fast-forwards the base branch to the task's branch (rebasing it first only when that is clean) and
   pushes the base, never with `--force`. A task that can't fast-forward goes back to Needs you with the reason.
+- **Radicle patches:** with `onix.radicle` set to `patch` (or `auto`: a repo whose rad remote this machine's Radicle
+  has), the work goes out as a Radicle patch instead of a push to origin. At Ready Shepherdr pushes the task's
+  branch to the repo's rad remote as a patch (`git push rad <commit>:refs/patches`, titled with the task). Accept
+  merges it the Radicle way: the branch is rebased onto `rad/<base>` when that is clean and the patch gets that commit
+  as a new revision, the base fast-forwards and goes to rad (never forced), and Radicle records the patch merged;
+  then the base goes to origin too, when the repo has one, so a GitHub mirror stays in step (a failure there is said
+  on the task; the merge stands). Only a delegate's push moves a Radicle repo's canonical branch, so Accept refuses
+  when this machine's Radicle identity isn't one of the repo's delegates, and the patch stays open for them.
+  Shepherdr never starts the Radicle node: without it the patch and the merge stay on this machine until the node
+  runs and announces them (the task says so).
 - **Cairn:** a task can name its Cairn change (`herdr-task add … --cairn <slug>`, or a `Cairn: <slug>` line in the
   task's prompt), and its worker's brief then names it in the Settings block. At Ready and before Accept, Shepherdr
   runs the change's read-only gates (`gate proposal`, `gate design`, `gate tasks`) and `validate`, and shows the
@@ -82,8 +114,27 @@ A task's repo is an **Onix repo** when it has a `.cairn/` folder or its `origin`
   read-only on that machine (`onix.kiln.db`, default `~/git/.kiln-web-service/web-live/service.sqlite`) through
   `hc exec`; Kiln builds only the branches its projects name (`main` today). Kiln runs its workflows on Lattice;
   Shepherdr only asks Kiln.
+- **Kiln before a merge:** with `onix.kiln.before_merge` on too, a Ready task's work is checked by Kiln before it
+  merges. Kiln builds only its project's branch, so the run is that branch's tip on the Kiln machine with the task's
+  changes on top, sent as Kiln's own dirty selection (`kiln-web-service ci submit --dirty-repository … --include …
+  --delete …`): the task's diff goes over `hc exec`, is applied in a scratch copy of the project's repository there
+  (removed after), and nothing is pushed anywhere. The project is `onix.kiln.project`, else the Kiln project whose
+  repository has the repo's folder name. The checks row on the Accept card shows the run. A pass lets the merge go
+  (Accept while it runs waits and merges once Kiln passes, as the Merge setting's auto and checks do); a failure is
+  Needs you with the run and its outcome, and holds the merge like a failing Cairn gate; a check that couldn't happen
+  (Kiln unreachable, its branch tip not in this repo, the changes don't apply, no answer in 2 hours) shows why and
+  holds nothing. A new head is checked again. The developer CLI uses `onix.kiln.developer`
+  (default `~/.config/kiln/developer.json`, a `kiln.web-developer.v1` profile on the Kiln machine) pinned by
+  `onix.kiln.identity` (the BLAKE3 of its bytes; unset, `b3sum` of it there). A rebase at merge time can land on a
+  newer base than the one Kiln checked.
+  Kiln must be able to execute a dirty selection: its own workers rebuild the snapshot from Kiln's store; a project
+  whose execution provider can't (a Lattice-provider project, when this was first tried) gets the run marked
+  `unknown` (`provider_unknown`) at once. An unknown run keeps its project busy in Kiln until an operator reconciles
+  it there, so the check reads Kiln's `unknown` as unknown (holding nothing) and sends nothing more for a project
+  that has one, saying which run holds it.
 - The role instructions tell agents to follow each repo's own AGENTS.md and CONTRIBUTING.md: its pinned tools,
-  its Cairn change, its declared gates, no pull requests, no force-push and no Radicle push.
+  its Cairn change, its declared gates, no pull requests, no force-push and no Radicle push (Shepherdr opens and
+  merges a task's patch itself).
 
 ## Settings
 
@@ -94,19 +145,19 @@ All in `~/.config/shepherdr/settings.json`, beside the upstream ones (`everywher
   "everywhere": {
     "onix": {
       "omp_providers": ["underclass", "mesh"],
+      "underclass": ["claude", "codex"],
+      "underclass_url": "http://127.0.0.1:8080",
       "forge": "auto",
-      "kiln": { "machine": "<herdr-core machine name>", "db": "~/git/.kiln-web-service/web-live/service.sqlite" }
+      "radicle": "off",
+      "kiln": { "machine": "<herdr-core machine name>", "db": "~/git/.kiln-web-service/web-live/service.sqlite",
+                "before_merge": true, "developer": "~/.config/kiln/developer.json", "identity": "<b3sum of it>" }
     }
   },
-  "spaces": { "<space id>": { "onix": { "forge": "onix", "cairn_cmd": "bun tools/cairn.mjs" } } }
+  "machines": { "<machine>": { "onix": { "underclass_key_cmd": "cat /run/secrets/…/proxy-key" } } },
+  "spaces": { "<space id>": { "onix": { "forge": "onix", "cairn_cmd": "bun tools/cairn.mjs", "radicle": "patch",
+                                        "kiln": { "project": "<kiln project id>" } } } }
 }
 ```
-
-## Not in this fork (yet)
-
-- Claude Code or Codex sent through Underclass: omp already reaches `underclass/claude-…` and the Codex models.
-- Radicle patches instead of pushing the base branch.
-- Kiln checks before a merge: Kiln builds only `main` today.
 
 ## Keeping up with upstream
 

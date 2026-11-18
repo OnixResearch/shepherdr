@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from . import onix, radicle, sandbox
+from . import kiln_check, onix, radicle, sandbox
 from .base import Fail, git, guard, now, run, STORE, stop_note, VERSION
 from .settings import (
     agent_argv, agent_key, bare, merge_policy, review_limits, set_opts, settings_block, settings_for, space_base,
@@ -268,6 +268,8 @@ def cmd_show(args):
         r = v["radicle"]
         text.append(f"radicle patch: {r['patch'][:7]} in {r['rid']}" + (f" ({r['state']})" if r.get("state") else " (open)")
                     + (" — this machine's node isn't running: announced once it runs" if r.get("offline") else ""))
+    if isinstance(v.get("kiln_check"), dict):
+        text.append(f"kiln check: {kiln_check.words(v['kiln_check'])['text']}")
     if v.get("why") and v["status"] == "needs":
         text.append(f"needs the person: {v['why']}")
     if v.get("proof"):
@@ -746,6 +748,14 @@ def onix_merge_now(s, t, gates=None):
         if why:
             t["attention"], t["attention_at"] = why, now()
             return why
+    # onix: Kiln checks it before it merges (kiln_check.py): a failure stops the merge (Needs you), a run
+    # still going makes it wait, and the scheduler merges it once Kiln passes (auto_merge)
+    held = kiln_check.hold(s, t)
+    if held:
+        why, waiting = held
+        if not waiting:
+            t["attention"], t["attention_at"] = why, now()
+        return why
     # A fetch, a rebase and a push can wait on the network or a hook: the task list's lock goes meanwhile.
     with released(s):
         res = onix.merge(s, t)
@@ -821,6 +831,9 @@ def finalize(s, t):
             t["radicle"] = rec
             msg = f"{s.ref(t)} is ready: Radicle patch {rec['patch'][:7]}" + (
                 " (this machine's Radicle node isn't running: the patch is announced once it runs)." if rec.get("offline") else ".")
+        # onix: Kiln checks it before it merges (kiln_check.py; the scheduler sends it and follows the run)
+        if kiln_check.want(s, t):
+            msg += " Kiln checks it before it merges."
         # onix: no pull request to open or wait on; Settings' merge policy decides whether Herdr
         # fast-forwards the base and pushes it now (a Cairn FAIL, just recorded, stops it).
         policy = merge_policy(s, t)
@@ -1250,6 +1263,10 @@ def cmd_merge(args):
             # linked Cairn change's FAIL stops it), never a pull request.
             how = "onix"
             error = onix_merge_now(s, t)
+            if error and error.startswith(kiln_check.KILN_RUNNING):
+                # onix: Kiln is still checking it: it merges once Kiln passes (kiln_check.check_pass)
+                t["auto_merge"], how, error = "checks", "kiln", None
+                s.dirty = True
         elif t.get("pr") or own_open_pr(s, t):
             # On GitHub: Herdr merges the pull request itself (squash), then tidies up here.
             how = "github"
@@ -1268,7 +1285,8 @@ def cmd_merge(args):
     if error:
         say(args, {**v, "error": error}, None) if args.json else print(f"herdr-task: {error}", file=sys.stderr)
         sys.exit(1)
-    text = f"{s.ref(t)}: fast-forwarded {t.get('base') or 'main'} and pushed it; done." if how == "onix" else \
+    text = f"{s.ref(t)}: it merges once Kiln passes." if how == "kiln" else \
+        f"{s.ref(t)}: fast-forwarded {t.get('base') or 'main'} and pushed it; done." if how == "onix" else \
         f"{s.ref(t)}: pull request #{t['pr']['number']} merged; done." if how == "github" else \
         f"{s.ref(t)}: pull request #{t['pr']['number']} is in GitHub's merge queue; done once GitHub merges it." if how == "queue" else \
         f"{s.ref(t)}: merge asked of {sent}" + (" (a new agent)" if started else "")
@@ -1356,6 +1374,9 @@ def cmd_accept(args):
             # onix: no pull request (github() says None here): fast-forward the base and push it.
             how = "onix"
             error = onix_merge_now(s, t, gates)
+            if error and error.startswith(kiln_check.KILN_RUNNING):
+                # onix: accepted while Kiln still checks it: it merges once Kiln passes (kiln_check.check_pass)
+                t["auto_merge"], how, error = "checks", "kiln", None
         elif t.get("pr") or own_open_pr(s, t):
             how = "github"
             error = merge_now(s, t)
@@ -1385,6 +1406,7 @@ def cmd_accept(args):
     text = {"done": f"{s.ref(t)} accepted: done.",
             "merged": f"{s.ref(t)} accepted: merged into {t.get('base') or 'main'}; done.",
             "onix": f"{s.ref(t)} accepted: fast-forwarded {t.get('base') or 'main'} and pushed it; done.",
+            "kiln": f"{s.ref(t)} accepted: it merges once Kiln passes.",
             "github": f"{s.ref(t)} accepted: pull request #{(t.get('pr') or {}).get('number')} merged; done.",
             "checks": f"{s.ref(t)} accepted: it merges once its checks pass.",
             "approval": f"{s.ref(t)} accepted: it merges once it's approved.",

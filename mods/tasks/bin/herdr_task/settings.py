@@ -609,8 +609,17 @@ def task_settings(s, t, space=None, argv=None, live=False):
     # onix: an Onix repo merges by fast-forwarding its base and pushing it (onix.py), and a task can name its
     # Cairn change: both shape the worker's work, so its brief says them (templates/worker.md's Onix line).
     if not here and _onix_mode(s, space):
-        add("Forge", "Onix: no pull request; after Accept, Herdr fast-forwards the base branch and pushes it",
-            "onix", None)
+        # onix: a Radicle patch instead of a push of the base (radicle.py), and Kiln's check before the merge
+        # (kiln_check.py), when Settings say so
+        from . import kiln_check, onix, radicle
+        folder = getattr(s, "loc", {}).get("folder")
+        via = bool(folder) and radicle.mode(onix.onix_settings(s, space), folder)
+        text = ("Onix: no pull request; when you say ready Herdr opens a Radicle patch of your branch, and after Accept it "
+                "merges it (the base branch fast-forwards and goes to rad, then origin)" if via else
+                "Onix: no pull request; after Accept, Herdr fast-forwards the base branch and pushes it")
+        if kiln_check.check_settings(s, space):
+            text += "; Kiln checks your work before it merges, and a Kiln failure comes back to you to fix"
+        add("Forge", text, "onix", None)
     if t.get("cairn"):
         add("Cairn", f"{t['cairn']}: the Cairn change you work in; its gates run when you say ready", t["cairn"], "task")
     proof = sets["proof"] == "on" if "proof" in sets else k.get("proof") is not False

@@ -692,6 +692,12 @@ def one_pass(report):
                     kiln_pass(s, report)
                 except Exception as e:  # never stops the scheduler
                     print(f"{time.strftime('%H:%M:%S')} kiln: {e}", flush=True)
+                try:  # onix: Kiln's check before a merge (off until onix.kiln.before_merge is set)
+                    from .commands import onix_merge_now
+                    from .kiln_check import check_pass
+                    check_pass(s, report, onix_merge_now)
+                except Exception as e:  # never stops the scheduler
+                    print(f"{time.strftime('%H:%M:%S')} kiln check: {e}", flush=True)
         try:
             retry_pass(report)
         except Exception as e:  # never stops the scheduler
