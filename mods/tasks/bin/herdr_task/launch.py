@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from .base import ASK_HOME, ENTRY, Fail, git, hc_json, now, run, WORKTREES
+from .base import ASK_HOME, beside_store, ENTRY, Fail, git, hc_json, now, run, WORKTREES
 from .settings import agent_key, ASSISTANT_TEMPLATES, trust_roots, bare, BRANCH_PATTERN, branch_pattern_problem, keep_review, notes, notes_part, review_limits, settings_block, settings_for
 from .templates import instructions
 from .agents import detail, LINE_MAX, live_agents, SUMMARY_MAX
@@ -57,19 +57,62 @@ def own_path():
     return found if found and os.path.realpath(found) == me else me
 
 
+LITERAL = re.compile(r"[\w@%+=:,./-]+")
+
+
+def own_commands(path):
+    """A worker's own commands as (program, verbs) pairs, verbs None for "any command of it": this
+    herdr-task with OWN, herdr-secret with SECRET (its path and its bare name), the task's browser
+    (HERD-57) with every command. [] when a program's path can't be stated literally."""
+    if not LITERAL.fullmatch(path):
+        return []
+    out = [(path, OWN)]
+    sp = secret_path()
+    for p in [sp, "herdr-secret"] if sp and LITERAL.fullmatch(sp) else []:
+        out.append((p, SECRET))
+    bp = browser_path()
+    for p in [bp, "herdr-browser"] if bp and LITERAL.fullmatch(bp) else []:
+        out.append((p, None))
+    return out
+
+
 def own_rules(path):
     """Claude's allow rules for this exact path; a path a rule can't state literally gets none."""
-    if not re.fullmatch(r"[\w@%+=:,./-]+", path):
-        return []
-    rules = [f"Bash({path} {verb}:*)" for verb in OWN]
-    sp = secret_path()
-    for p in [sp, "herdr-secret"] if sp and re.fullmatch(r"[\w@%+=:,./-]+", sp) else []:
-        rules += [f"Bash({p} {verb}:*)" for verb in SECRET]
-    # The task's browser (HERD-57): every herdr-browser command, as the brief writes it.
-    bp = browser_path()
-    for p in [bp, "herdr-browser"] if bp and re.fullmatch(r"[\w@%+=:,./-]+", bp) else []:
-        rules += [f"Bash({p}:*)"]
+    rules = []
+    for p, verbs in own_commands(path):
+        rules += [f"Bash({p}:*)"] if verbs is None else [f"Bash({p} {verb}:*)" for verb in verbs]
     return rules
+
+
+def own_omp_rules(path):
+    """The same commands as omp `bash.patterns` entries ({match, approval: "allow"}), the overlay its
+    launch is given: omp globs the whole command line, so a verb's pattern ends with "*" and a bare
+    program's with "*" too. [] when a program's path can't be stated literally."""
+    rules = []
+    for p, verbs in own_commands(path):
+        rules += [{"match": f"{p}*", "approval": "allow"}] if verbs is None else \
+            [{"match": f"{p} {verb}*", "approval": "allow"} for verb in verbs]
+    return rules
+
+
+def omp_config_file(rules):
+    """The --config overlay holding own_omp_rules, named by a hash of its own content so the same rules
+    are one file: written once, under herdr-task's state folder beside its store (never ~/.omp), or None
+    when it can't be written (a launch then goes ahead without it). omp reads JSON as YAML."""
+    data = json.dumps({"bash": {"patterns": rules}}, sort_keys=True, separators=(",", ":")) + "\n"
+    d = os.path.join(os.path.dirname(beside_store("cli-check", "cli-check.json")), "omp")
+    path = os.path.join(d, "config-" + hashlib.sha256(data.encode()).hexdigest()[:16] + ".json")
+    if os.path.isfile(path):
+        return path
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{secrets.token_hex(3)}.tmp"
+        with open(tmp, "w") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except OSError:
+        return None
+    return path
 
 
 def ask_command(path, sandboxed=False):
@@ -92,9 +135,17 @@ def own_argv(argv, folder=None):
     path, out = own_path(), list(argv)
     k = agent_key(out)
     if k == "omp":
-        # onix: omp takes no permission hook and has no allowlist flag: its approval mode, which argv_for
-        # always says (--approval-mode), is all a launch can give it. Nothing else is added here.
-        return out
+        # onix: omp has no permission hook. Its own commands come as a --config overlay of bash.patterns
+        # (own_omp_rules), which omp prepends ahead of the global ones, so a `write`/`always-ask-cached`
+        # worker still runs herdr-task, herdr-secret and its browser without asking. The overlay is
+        # content-addressed and written once, so a relaunch over an argv that already carries it is
+        # left alone; --approval-mode stays what argv_for set.
+        rules = own_omp_rules(path)
+        conf = omp_config_file(rules) if rules else None
+        if not conf or f"--config={conf}" in out or any(
+                a == "--config" and i + 1 < len(out) and out[i + 1] == conf for i, a in enumerate(out)):
+            return out
+        return out[:1] + ["--config", conf] + out[1:]
     if k == "claude":
         rules = own_rules(path)
         hook = {"hooks": [{"type": "command", "command": ask_command(path), "timeout": ASK_TIMEOUT}]}
