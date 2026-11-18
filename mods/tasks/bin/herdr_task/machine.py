@@ -564,7 +564,8 @@ def _account_windows(account):
 
 def pool_read(payload):
     """The monitor's accounts as a read: for each backend and window kind, the headroom of its best
-    usable account (the lowest % used, and that account's reset): the pool, not its worst account."""
+    usable account (the lowest % used, and that account's reset; a tie goes to the earliest reset):
+    the pool, not its worst account."""
     accounts = payload.get("accounts") if isinstance(payload, dict) else None
     if not isinstance(accounts, list):
         return {"state": "unknown", "why": "Its monitor had no accounts in it"}
@@ -595,7 +596,10 @@ def pool_read(payload):
             if key not in best:
                 order.append(key)
                 best[key] = (used, reset)
-            elif used < best[key][0]:
+            # A lower use wins; on a tie (both exhausted, say) the account that frees first does (a known
+            # reset before none): that is when the pool's headroom comes back.
+            elif used < best[key][0] or (used == best[key][0] and reset is not None
+                                         and (best[key][1] is None or reset < best[key][1])):
                 best[key] = (used, reset)
     rank = {b: i for i, b in enumerate(POOL_ORDER)}
     rank_of = {name: i for i, name in enumerate(WINDOW_ORDER)}

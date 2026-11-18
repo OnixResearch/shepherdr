@@ -205,6 +205,30 @@ class Pool(unittest.TestCase):
         self.assertEqual([(w["name"], w["used"]) for w in read["windows"]],
                          [("Claude · 5-hour", 10.0), ("Claude · Weekly", 50.0)])
 
+    def test_a_tie_on_used_takes_the_account_that_frees_first(self):
+        # Live: two Codex accounts both at 100% weekly. The earlier reset is when the pool frees up;
+        # a third account at the same 100% but with no reset time can't say when, so it loses.
+        service = self.service({"accounts": [
+            {"backend": "codex", "status": "cooling",
+             "quota": {"rate_limit": {"primary_window": {"used_percent": 100.0, "reset_at": 1795551869, "limit_window_seconds": 604800}}}},
+            {"backend": "codex", "status": "cooling",
+             "quota": {"rate_limit": {"primary_window": {"used_percent": 100.0, "reset_at": 1795000000, "limit_window_seconds": 604800}}}},
+            {"backend": "codex", "status": "cooling",
+             "quota": {"rate_limit": {"primary_window": {"used_percent": 100.0, "limit_window_seconds": 604800}}}}]})
+        with mock.patch.dict(os.environ, {"SHEPHERDR_UNDERCLASS_MONITOR": service.path}):
+            read = machine.underclass()
+        self.assertEqual(read["windows"], [{"name": "Codex · Weekly", "used": 100.0, "resets_at": 1795000000000}])
+
+    def test_a_lower_used_wins_whatever_its_reset(self):
+        service = self.service({"accounts": [
+            {"backend": "codex", "status": "cooling",
+             "quota": {"rate_limit": {"primary_window": {"used_percent": 100.0, "reset_at": 1795000000, "limit_window_seconds": 604800}}}},
+            {"backend": "codex", "status": "healthy",
+             "quota": {"rate_limit": {"primary_window": {"used_percent": 40.0, "reset_at": 1799000000, "limit_window_seconds": 604800}}}}]})
+        with mock.patch.dict(os.environ, {"SHEPHERDR_UNDERCLASS_MONITOR": service.path}):
+            read = machine.underclass()
+        self.assertEqual(read["windows"], [{"name": "Codex · Weekly", "used": 40.0, "resets_at": 1799000000000}])
+
     def test_no_monitor_here_is_no_key(self):
         tmp = tempfile.mkdtemp(prefix="shep-pool-")
         self.addCleanup(shutil.rmtree, tmp, True)
