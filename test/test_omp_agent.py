@@ -9,6 +9,7 @@ Claude Code's and Codex's own behaviour is test_herdr_task's.
 import home_guard  # noqa: F401  (first: every test on a throwaway home, never the real one)
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -141,9 +142,14 @@ class Settings(unittest.TestCase):
 
 
 class Launch(unittest.TestCase):
-    def test_own_argv_adds_nothing_to_omp(self):
+    def test_own_argv_adds_nothing_to_omp_but_its_own_overlay(self):
+        """No hook, no --settings for omp: only the --config of its own allow rules (OwnConfig below)."""
         argv = ["omp", "--model", "underclass/x", "--approval-mode", "write"]
-        self.assertEqual(launch.own_argv(argv, "/tmp"), argv)
+        with mock.patch.object(launch, "secret_path", lambda: None), mock.patch.object(launch, "browser_path", lambda: None), \
+                mock.patch.object(launch, "beside_store", lambda kind, name: os.path.join(tempfile.mkdtemp(), name)):
+            out = launch.own_argv(argv, "/tmp")
+        self.assertEqual([a for a in out if a not in argv], ["--config", out[2]])
+        self.assertEqual(out[:1] + out[3:], argv)
 
     def test_resume_keeps_the_flags_it_started_with(self):
         argv = ["omp", "--model", "underclass/x", "--thinking", "high", "--approval-mode", "write"]
@@ -180,6 +186,92 @@ class Launch(unittest.TestCase):
         wide = shlex.split("hc run --bg --label herdr.agent=omp -- omp --approval-mode yolo 'do the task'")
         self.assertFalse(launch.helper_hc(wide))  # a worker, not a reviewer
         self.assertTrue(launch.helper_hc(["hc", "wait", "dev-1-review"]))
+
+
+class OwnConfig(unittest.TestCase):
+    """onix: an omp worker's own commands as a --config overlay of omp bash.patterns, which omp prepends
+    ahead of the global ones (`omp config get bash.patterns --json` with PI_CONFIG_FILES shows them first):
+    a Write or Ask-and-remember worker then runs herdr-task, herdr-secret and its browser unasked."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.state = os.path.join(self.tmp, "state")
+        self.ht, self.secret, self.browser = ("/home/me/.local/bin/herdr-task", "/home/me/.local/bin/herdr-secret",
+                                             "/home/me/.local/bin/herdr-browser")
+        for name, value in (("beside_store", lambda kind, name: os.path.join(self.state, name)),
+                            ("own_path", lambda: self.ht), ("secret_path", lambda: self.secret),
+                            ("browser_path", lambda: self.browser)):
+            p = mock.patch.object(launch, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def translated(self, rules):
+        """Claude's rules as the same omp patterns: Bash(<program> <verb>:*) -> {match: <program> <verb>*}."""
+        out = []
+        for r in rules:
+            m = re.fullmatch(r"Bash\((.*):\*\)", r)
+            self.assertIsNotNone(m, r)
+            out.append({"match": m.group(1) + "*", "approval": "allow"})
+        return out
+
+    def argv(self, folder="/tmp/w"):
+        return launch.own_argv(["omp", "--approval-mode", "write"], folder)
+
+    def test_the_overlay_mirrors_claudes_rules_exactly(self):
+        rules = launch.own_omp_rules(self.ht)
+        self.assertEqual(rules, self.translated(launch.own_rules(self.ht)))
+        self.assertEqual(rules[0], {"match": f"{self.ht} ready*", "approval": "allow"})
+        self.assertEqual(rules[1], {"match": f"{self.ht} reviewed*", "approval": "allow"})
+        self.assertEqual(rules[-2:], [{"match": f"{self.browser}*", "approval": "allow"},
+                                      {"match": "herdr-browser*", "approval": "allow"}])
+        self.assertTrue(all(r["approval"] == "allow" for r in rules))
+        self.assertEqual([r["match"] for r in rules if r["match"] == f"{self.secret} ask*"], [f"{self.secret} ask*"])
+        self.assertEqual([r["match"] for r in rules if r["match"] == "herdr-secret list*"], ["herdr-secret list*"])
+
+    def test_the_launch_gets_the_overlay_file_right_after_omp(self):
+        argv = self.argv()
+        self.assertEqual(argv[:2], ["omp", "--config"])
+        conf = argv[2]
+        self.assertEqual(argv[3:], ["--approval-mode", "write"])
+        self.assertTrue(conf.startswith(os.path.join(self.state, "omp") + os.sep), conf)
+        with open(conf) as f:
+            self.assertEqual(json.load(f), {"bash": {"patterns": launch.own_omp_rules(self.ht)}})
+
+    def test_a_relaunch_keeps_one_identical_overlay(self):
+        argv = self.argv()
+        conf = argv[2]
+        before = os.stat(conf)
+        self.assertEqual(self.argv(), argv)                       # the same rules: the same file and one flag
+        self.assertEqual(launch.own_argv(argv, "/tmp/w"), argv)    # an argv that already carries it is left alone
+        self.assertEqual(launch.own_argv(argv, "/tmp/w").count("--config"), 1)
+        self.assertEqual(launch.own_argv(["omp", f"--config={conf}", "--approval-mode", "write"]),
+                         ["omp", f"--config={conf}", "--approval-mode", "write"])
+        after = os.stat(conf)
+        self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))  # written once
+        self.assertEqual(os.listdir(os.path.dirname(conf)), [os.path.basename(conf)])
+
+    def test_a_different_overlay_does_not_block_ours(self):
+        conf = self.argv()[2]
+        out = launch.own_argv(["omp", "--config", "/elsewhere.json"], "/tmp/w")
+        self.assertEqual(out[:3], ["omp", "--config", conf])
+        self.assertIn("/elsewhere.json", out)
+
+    def test_a_path_a_rule_cant_state_gets_no_flag(self):
+        with mock.patch.object(launch, "own_path", lambda: "/opt/my tools/herdr-task"):
+            self.assertEqual(self.argv(), ["omp", "--approval-mode", "write"])
+        self.assertFalse(os.path.exists(os.path.join(self.state, "omp")))
+
+    def test_resume_and_restore_keep_the_overlay(self):
+        argv = self.argv()
+        conf = argv[2]
+        resumed = launch.resume_argv(argv, "/s/" + SESSION)
+        self.assertEqual(resumed[:3], argv[:3])
+        self.assertEqual(resumed[resumed.index("--config") + 1], conf)
+        kind, base = revive.base_argv(argv)
+        self.assertEqual((kind, base), ("omp", argv))              # --config is no session flag
+        restored = revive.resume_argv(kind, base, "/s/" + SESSION, "carry on")
+        self.assertEqual(restored[restored.index("--config") + 1], conf)
+        self.assertIn("--restore", restored)
 
 
 class Revive(unittest.TestCase):
