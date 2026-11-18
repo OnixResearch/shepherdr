@@ -131,11 +131,12 @@ export const WEB_KEYS = {
     "alt-down": "space.next", "alt-up": "space.prev",
     "ctrl-shift-/": "mod.open:keybinds", "ctrl-shift-?": "mod.open:keybinds",
     "ctrl-shift-b": "layout.toggle:sidebar",
-    "ctrl-shift-k": "mod.open:jump", "ctrl-k": "mod.open:jump",
+    "ctrl-shift-k": "mod.open:jump",
     "ctrl-,": "app.settings",
   },
   "mod:chat": { "ctrl-shift-d": "chat.dictate", "ctrl-shift-space": "chat.call", "ctrl-f": "chat.find" },
-  "layout:shepherdr": { "shift-f2": "tabs-tasks.rename-space" },
+  // onix: Ctrl+K is the Shepherdr layout's own (keys.json), so terminal programs keep it in other layouts.
+  "layout:shepherdr": { "shift-f2": "tabs-tasks.rename-space", "ctrl-k": "mod.open:jump" },
 };
 
 // keys.json's sections as the list grouped() takes: { section: { keys: action } } -> [{ section, keys, action }].

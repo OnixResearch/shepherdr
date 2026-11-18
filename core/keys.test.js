@@ -18,7 +18,8 @@ test("Shepherdr's keys.json grouped: the layout's own key replaces the global on
   const row = (group, name) => g.find((x) => x.group === group)?.rows.find((r) => r.name === name);
   expect(row("Tabs", "Show tab 1–9").keys).toEqual(["Alt+1–9"]);
   expect(row("Tabs", "Close tab").keys).toEqual(["Ctrl+Shift+W"]);
-  expect(row("App", "Jump to a space, task or artifact").keys).toEqual(["Ctrl+K", "Ctrl+Shift+K"]);
+  // onix: Ctrl+K is the layout's own key in this fork's keys.json, so it follows the global Ctrl+Shift+K.
+  expect(row("App", "Jump to a space, task or artifact").keys).toEqual(["Ctrl+Shift+K", "Ctrl+K"]);
   expect(row("App", "Keybinds").keys).toEqual(["Ctrl+Shift+/", "Ctrl+Shift+?"]);
   expect(row("Chat", "Find in the chat").keys).toEqual(["Ctrl+F"]);
 });
