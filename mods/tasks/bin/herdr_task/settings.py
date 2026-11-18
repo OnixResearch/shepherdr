@@ -479,10 +479,11 @@ def reviewer_command(who, model=None, effort=None, folder=None):
         a += ["--model", model] if model else []
         a += ["--effort", effort] if effort else []
     elif who == "omp":
-        # onix: omp has no read-only sandbox flag. always-ask-cached ("ask and remember") asks before a
-        # read, a write or an exec, so a reviewer never changes anything on its own; the reviewer brief
-        # already says read-only, and a check it can't run is one it names for its worker (#840's rule).
-        a = ["omp", "--approval-mode", "always-ask-cached"]
+        # onix: omp has no read-only sandbox flag. always-ask approves read-only tools and asks before any
+        # write or command, so a reviewer reads the code unattended and never changes anything on its own;
+        # templates/reviewer.md tells it to run no command and name the checks for its worker instead
+        # (#840's rule for Codex's sandbox). always-ask-cached would ask before every file read and stall it.
+        a = ["omp", "--approval-mode", "always-ask"]
         a += ["--model", model] if model else []
         a += ["--thinking", effort] if effort else []
     else:
