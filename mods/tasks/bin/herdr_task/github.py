@@ -8,6 +8,7 @@ import shutil
 
 from .base import Fail, GH, git, hc_json, now, run, STORE
 from .agents import agent_running, detail, live_agents, live_helpers, mid_turn_agents
+from . import onix
 
 
 # ---- GitHub ---------------------------------------------------------------------------------
@@ -28,6 +29,9 @@ def github(s):
     None merged a task locally while its pull request stayed open): None, with why in
     github_unreachable(s)."""
     if s.loc["kind"] != "repo" or not shutil.which(GH):
+        return None
+    # onix: an Onix repo never opens a pull request (onix.py merges by fast-forward on Accept)
+    if onix.mode(s):
         return None
     g = s.data.get("github") or {}
     if g and now() - g.get("at", 0) < 3600000:

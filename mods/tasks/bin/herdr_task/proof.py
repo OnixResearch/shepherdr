@@ -9,6 +9,7 @@ import re
 
 from .base import Fail, HOME, git, WHERE
 from .github import BAD, CANT_READ_CHECKS, PENDING, pr_view
+from . import onix
 
 ARTIFACTS = WHERE.path("artifacts")
 # Files named on the card, and commits.
@@ -99,8 +100,15 @@ def checks_of(t):
 def evidence(s, t):
     """What an Accept card shows: {summary, details, commits: {count, list}, diff: {files, added, removed,
     list} or None, git (False: not a git folder), scope, checks, proof, artifacts (its others), merges (Accept
-    merges its branch first: an open pull request or commits past its base; the button says so)}."""
+    merges its branch first: an open pull request or commits past its base; the button says so), and for Onix
+    repos the forge (its Accept fast-forwards and pushes the base) with the linked Cairn change's gates}."""
     main, out = s.loc["folder"], {"summary": t.get("summary"), "details": t.get("details"), "proof": t.get("proof") or find_proof(s, t)}
+    # onix: how Accept lands its work (a pull request, or a fast-forward and push), and the linked
+    # Cairn change's recorded gates (ready and Accept write them; the card shows them)
+    out["forge"] = onix.forge(s)
+    out["base"] = t.get("base") or "main"
+    if t.get("cairn") or t.get("cairn_gates"):
+        out["cairn"] = {"change": t.get("cairn"), **(t.get("cairn_gates") or {})}
     out["artifacts"] = task_artifacts(s, t, out["proof"])
     commits, files = [], {}
     fmt = "--format=%h%x09%s"

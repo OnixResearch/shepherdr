@@ -17,7 +17,7 @@ import { appHome, closeOverlay, exec, notify, openOverlay, props, shared, setSha
 import { note } from "./usage.js";
 import { dialogFooter, green, red, amber, H, RADIUS, TEXT } from "./ui.js";
 // The card's words, the summary cut and the details as bullets: core/accept.js, shared with the web app's card.
-import { ACCEPT, acceptLabel, words, readable, commitsLine, filesLine, moreLine, proofTitle, whereNow } from "./core/accept.js";
+import { ACCEPT, acceptLabel, cairnLine, cairnState, cairnWords, words, readable, commitsLine, filesLine, moreLine, proofTitle, whereNow } from "./core/accept.js";
 import { settle } from "./core/pending.js";
 
 export { words, readable };
@@ -239,6 +239,26 @@ export default class AcceptCard extends View {
       .child(div().text_color(c.state === "none" ? t.muted : t.foreground).child(c.text));
   }
 
+  // onix: the linked change's read-only gates (ready and Accept record them; a FAIL stops the merge), and what
+  // validate said. An error there is unknown, with why: never drawn as a pass.
+  cairn(t, e) {
+    const c = e.cairn ?? {};
+    const state = cairnState(c);
+    if (state === "none" && !c.change) return div().text_color(t.muted).child(ACCEPT.cairnNoChange);
+    const color = { passed: green(), failed: red(), unknown: amber() }[state] ?? t.muted;
+    const rows = [];
+    const line = cairnLine(c);
+    if (line) rows.push(line);
+    if (c.valid === true || c.valid === false) rows.push(ACCEPT.cairnValidate(c.valid));
+    if (c.why) rows.push(c.why);
+    return v_flex().gap(6).min_w(0)
+      .child(h_flex().gap(8).items_center()
+        .child(div().size(7).flex_none().rounded(4).bg(color))
+        .child(div().text_color(t.foreground).child(`${c.change ?? ACCEPT.cairn} · ${cairnWords(state)}`)))
+      .when(rows.length > 0, (el) => el.child(v_flex().gap(3).min_w(0).children(rows.map((r) =>
+        div().text_size(12).text_color(t.muted).child(r)))));
+  }
+
   // Proof: a row that looks pressable, opening the artifact in a modal.
   proof(t, e) {
     if (!e.proof) return div().text_color(t.muted).child(ACCEPT.noProof);
@@ -302,8 +322,12 @@ export default class AcceptCard extends View {
       : v_flex().w_full().gap(16).pb(4)
         .child(div().max_w(560).text_size(TEXT.body).line_height("20px").text_color(w.summary ? t.foreground : t.muted)
           .child(w.summary || ACCEPT.noSummary))
+        // onix: what Accept does here, said before the sections (no pull request is opened)
+        .when(Boolean(e.forge === "onix" && e.merges !== false), (el) => el.child(div().text_size(TEXT.label).text_color(t.muted)
+          .child(ACCEPT.onixMerge(e.base ?? "main"))))
         .child(this.section(t, ACCEPT.changes, this.changes(t, e)))
         .child(this.section(t, ACCEPT.checks, this.checks(t, e)))
+        .when(Boolean(e.forge === "onix" || e.cairn?.change), (el) => el.child(this.section(t, ACCEPT.cairn, this.cairn(t, e))))
         .child(this.section(t, ACCEPT.proof, this.proof(t, e)))
         .when(Boolean(e.artifacts?.length), (el) => el.child(this.section(t, ACCEPT.artifacts, this.artifacts(t, e))))
         .when(Boolean(w.details), (el) => el.child(this.detailsSection(t, w.details)));
