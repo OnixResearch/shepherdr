@@ -497,6 +497,7 @@ export class Settings {
     } else if (key === "onix.omp_providers") {
       // which of omp's providers its models come from (Everywhere: its catalog is read the same on every machine);
       // empty: back to the default list (core/agents.js OMP_PROVIDERS)
+      // Everywhere's only: a space can't set its own (a machine scope is refused above, as for every non-machine row)
       if (space) throw new Error("omp's providers are set for every space at once.");
       const words = String(word ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
       if (words.some((x) => !/^[a-z0-9][a-z0-9_-]*$/.test(x))) throw new Error(OMP_MODELS.bad);

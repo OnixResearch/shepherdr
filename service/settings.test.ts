@@ -271,6 +271,9 @@ test("an omp pick is a role's agent like Claude's or Codex's, and its providers 
   expect(row()?.value).toBe("mesh, underclass");
   expect(row("sp9")).toBeUndefined();
   expect(() => s.set("onix.omp_providers", "mesh", "sp9", scope)).toThrow(/every space/);
+  // a machine scope can't set it either: it is Everywhere's one list (as for every other non-machine row)
+  s.sections(null, [scope], ["box"], "local");
+  expect(() => s.set("onix.omp_providers", "mesh", "m:box")).toThrow(/can't be changed here/);
   expect(() => s.set("onix.omp_providers", "mesh; rm -rf", "all")).toThrow(/Name providers/);
   s.set("onix.omp_providers", "", "all");
   expect(JSON.parse(readFileSync(file, "utf8")).everywhere.onix).toBeUndefined();
