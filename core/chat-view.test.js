@@ -262,7 +262,7 @@ test("bgGroups: one row per kind, subagents first, the newest and their shared s
 import { subagentCli } from "./chat-view.js";
 test("omp: its name in a group chat, its CLI in a subagent's title, and the notice that lists the CLIs", () => {
   expect(selfName({ kind: "omp" })).toBe("omp");
-  expect(subagentCli({ foreground: { argv: ["/home/x/.local/bin/omp", "--model", "underclass/deepseek-v4.1-flash"] } })).toBe("omp");
+  expect(subagentCli({ foreground: { argv: [".local/bin/omp", "--model", "underclass/deepseek-v4.1-flash"] } })).toBe("omp");
   expect(subagentCli({ labels: { "herdr.agent": "omp" } })).toBe("omp");
   expect(subagentTitle({ role: "helper", cli: "omp" })).toBe("Helper · omp");
   expect(WORDS.unsupportedBody).toContain("omp");
