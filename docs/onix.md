@@ -48,7 +48,8 @@ reads, when they are there:
 
 - **Underclass:** the monitor socket (`/run/underclass/monitor.sock`, or `SHEPHERDR_UNDERCLASS_MONITOR`). For each
   backend (Codex, Claude, OpenCode Go) it shows the best account's headroom per window, so one spent account doesn't
-  hide the others, plus the banked Codex resets. It never shows account names.
+  hide the others; when every account of a backend is spent, the window shows the earliest reset, when headroom comes
+  back. It also counts the accounts and the banked Codex resets, and never shows account names.
 - **mesh-llm:** the console on `127.0.0.1:3131` (or `SHEPHERDR_MESH_CONSOLE`): the node's state, peers, and the
   models it serves. Never its invite token.
 
@@ -63,18 +64,19 @@ A task's repo is an **Onix repo** when it has a `.cairn/` folder or its `origin`
 - **Merging:** no pull request. On the person's Accept (or by itself when the Merge setting allows), Shepherdr
   fetches, fast-forwards the base branch to the task's branch (rebasing it first only when that is clean) and
   pushes the base, never with `--force`. A task that can't fast-forward goes back to Needs you with the reason.
-- **Cairn:** a task can name its Cairn change (`herdr-task add … --cairn <slug>`, or a `Cairn: <slug>` line in its
-  brief's Settings). At Ready and before Accept, Shepherdr runs the change's read-only gates (`gate proposal`,
-  `gate design`, `gate tasks`) and `validate`, and shows the verdicts on the Accept card. A failing gate holds the
-  merge like a failing check; a gate that couldn't run (tool or policy mismatch) shows why and holds nothing.
-  Shepherdr never runs `sync` or `archive`.
+- **Cairn:** a task can name its Cairn change (`herdr-task add … --cairn <slug>`, or a `Cairn: <slug>` line in the
+  task's prompt), and its worker's brief then names it in the Settings block. At Ready and before Accept, Shepherdr
+  runs the change's read-only gates (`gate proposal`, `gate design`, `gate tasks`) and `validate`, and shows the
+  verdicts on the Accept card. A failing gate holds the merge like a failing check; a gate that couldn't run (tool or
+  policy mismatch) shows why and holds nothing. Shepherdr never runs `sync` or `archive`.
 - **Which `cairn`:** the space's `onix.cairn_cmd` when set; else `bun tools/cairn.mjs` when the repo has it; else
   `cairn` with the repo's `cairn-policy/generated/cairn-policy.json` when it has one; else `cairn`.
 - **Kiln:** with `onix.kiln.machine` set to the herdr-core machine that runs Kiln, Shepherdr follows Kiln's CI for
   each commit it merged (every 2 minutes, for up to 2 hours), shows the outcome on the task and tells the space's
-  Assistant. It reads Kiln's state read-only on that machine (`onix.kiln.db`, default
-  `~/git/.kiln-web-service/web-live/service.sqlite`). No run found is "unknown", never "passed". Kiln runs its
-  workflows on Lattice; Shepherdr only asks Kiln.
+  Assistant, also when no run settled within the 2 hours ("unknown", never "passed"). It reads Kiln's state
+  read-only on that machine (`onix.kiln.db`, default `~/git/.kiln-web-service/web-live/service.sqlite`) through
+  `hc exec`; Kiln builds only the branches its projects name (`main` today). Kiln runs its workflows on Lattice;
+  Shepherdr only asks Kiln.
 - The role instructions tell agents to follow each repo's own AGENTS.md and CONTRIBUTING.md: its pinned tools,
   its Cairn change, its declared gates, no pull requests, no force-push and no Radicle push.
 
