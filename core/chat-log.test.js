@@ -2,18 +2,21 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LOG, Conversation, records, pilotLine, sendsOf } from "./chat-log.js";
+import { LOG, Conversation, records, pilotLine, resultText, sendsOf } from "./chat-log.js";
 
-// A Claude Code log as LOG reads it, fed to a Conversation.
-async function read(lines) {
+// A log as LOG reads it, fed to a Conversation.
+async function recordsOf(lines) {
   const dir = mkdtempSync(join(tmpdir(), "chat-log-"));
   const f = join(dir, "log.jsonl");
   writeFileSync(f, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
   const p = Bun.spawn(["sh", "-c", LOG, "log", "tail", f, "0"], { stdout: "pipe", stderr: "ignore" });
   const out = await new Response(p.stdout).text();
   rmSync(dir, { recursive: true });
-  const c = new Conversation("claude");
-  c.feed(records(out).records);
+  return records(out).records;
+}
+async function read(lines, kind = "claude") {
+  const c = new Conversation(kind);
+  c.feed(await recordsOf(lines));
   return c;
 }
 const said = (c) => c.items.filter((x) => x.kind === "agent").map((x) => x.text);
@@ -282,4 +285,141 @@ test("an empty suggest line counts as none, and a suggest line inside a code blo
   expect(agents[0].suggest).toBeUndefined();
   expect(agents[1].suggest).toBeUndefined();
   expect(agents[1].text).toContain('<hc suggest="x"/>');
+});
+
+// omp (contract A): its session log is a tree of entries, each with an id and a parentId. Its own
+// synthetic lines (never a real session's words): title/session first, then messages.
+const ompAt = (s) => `2026-11-18T10:00:${String(s).padStart(2, "0")}.000Z`;
+const omp = (id, parentId, timestamp, message) => ({ type: "message", id, parentId, timestamp, runtime: { version: "18.22.0" }, message });
+const ompUser = (id, parentId, words, s = 1) => omp(id, parentId, ompAt(s), { role: "user", attribution: "user", content: [{ type: "text", text: words }] });
+const ompReply = (id, parentId, content, more = {}, s = 2) => omp(id, parentId, ompAt(s), {
+  role: "assistant", content, provider: "underclass", model: "deepseek-v4.1-flash", stopReason: "toolUse",
+  usage: { input: 3, output: 9, cacheRead: 100, cacheWrite: 5, totalTokens: 117, cost: { total: 0.1 } }, ...more });
+const ompResult = (id, parentId, toolCallId, output, isError = false, s = 3) => omp(id, parentId, ompAt(s), {
+  role: "toolResult", toolCallId, toolName: "read", content: [{ type: "text", text: output }], isError });
+const ompHeads = [
+  { type: "title", v: 1, title: "Test" },
+  { type: "session", version: 3, id: "s1", timestamp: ompAt(0), cwd: "/tmp/x" },
+];
+const hidden = { type: "thinking", thinking: "Thinking it over." };
+const words = (t) => ({ type: "text", text: t });
+const toolCall = (id, name, args) => ({ type: "toolCall", id, name, arguments: args });
+
+test("an omp session: the person's messages, its words, its calls and what it runs on", async () => {
+  const c = await read([
+    ...ompHeads,
+    ompUser("u1", "s0", "Look at the file"),
+    ompReply("a1", "u1", [hidden, words("Reading it."), toolCall("tc1", "read", { path: "src/a.js", i: "Reading a" })]),
+    ompResult("r1", "a1", "tc1", "one\ntwo", false, 3),
+    ompReply("a2", "r1", [words("Done.")], { stopReason: "stop", usage: { totalTokens: 130 } }, 4),
+  ], "omp");
+  expect(c.items.map((x) => x.kind)).toEqual(["user", "agent", "tools", "agent"]);
+  expect(c.items[0].text).toBe("Look at the file");
+  expect(c.items[1].text).toBe("Reading it.");   // its thinking stays hidden
+  const step = c.items[2].steps[0];
+  expect(step).toMatchObject({ kind: "read", line: "Read src/a.js" });
+  expect(typeof step.out).toBe("number");        // answered: where its output is
+  expect(step.failed).toBeUndefined();
+  expect(c.items[3].text).toBe("Done.");
+  expect(c.meta.model).toBe("underclass/deepseek-v4.1-flash");
+  expect(c.meta.used).toBe(130);
+  expect(c.doing).toBe(null);
+  expect(c.open.size).toBe(0);
+});
+
+test("an omp call whose result says isError is a failed step, and its output is read from its line", async () => {
+  const lines = [
+    ...ompHeads,
+    ompUser("u1", "s0", "Try it"),
+    ompReply("a1", "u1", [toolCall("tc1", "bash", { command: "false", i: "Trying" })]),
+    ompResult("r1", "a1", "tc1", "it did not work", true, 3),
+  ];
+  const recs = await recordsOf(lines);
+  const r = recs.find((x) => x.kind === "R");
+  expect(r.data).toBe("tc1 FAILED");
+  const c = new Conversation("omp");
+  c.feed(recs);
+  expect(c.items.find((x) => x.kind === "tools").steps[0].failed).toBe(true);
+  // the row's output, from the line at its offset (as the reader asks for it when the row opens)
+  const dir = mkdtempSync(join(tmpdir(), "chat-log-"));
+  const f = join(dir, "log.jsonl");
+  writeFileSync(f, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const p = Bun.spawn(["sh", "-c", LOG, "log", "results", f, String(r.off)], { stdout: "pipe", stderr: "ignore" });
+  const out = await new Response(p.stdout).text();
+  rmSync(dir, { recursive: true });
+  const line = out.split("\x1e").at(-1).replace(/^\d+/, "").replace(/^\n/, "").replace(/\n$/, "");
+  expect(resultText(line, "tc1")).toBe("it did not work");
+});
+
+test("an omp turn that ended in an error shows one error row", async () => {
+  const c = await read([
+    ...ompHeads,
+    ompUser("u1", "s0", "Hello"),
+    ompReply("a1", "u1", [], { stopReason: "error", errorMessage: "The connection dropped." }),
+  ], "omp");
+  expect(c.items.map((x) => x.kind)).toEqual(["user", "error"]);
+  expect(c.items[1].text).toBe("The connection dropped.");
+});
+
+test("a branched omp session shows only the live branch, and what the abandoned one left open goes", async () => {
+  const c = await read([
+    ...ompHeads,
+    ompUser("u1", "s0", "Hello"),
+    ompReply("a1", "u1", [words("First try."), toolCall("tc1", "bash", { command: "false", i: "Trying" })]),
+    // rewound to u1: a1 and r1 are another branch now
+    ompReply("a2", "u1", [words("Second try.")], { stopReason: "stop" }, 4),
+    ompUser("u2", "a2", "Go on", 5),
+  ], "omp");
+  expect(c.items.map((x) => x.kind)).toEqual(["user", "agent", "user"]);
+  expect(said(c)).toEqual(["Second try."]);
+  expect(c.ompChain).toEqual(["u1", "a2", "u2"]);
+  expect(c.doing).toBe(null);
+  expect(c.open.size).toBe(0);
+});
+
+test("an interrupted omp turn stops the call it had open", async () => {
+  const c = await read([
+    ...ompHeads,
+    ompUser("u1", "s0", "Hello"),
+    ompReply("a1", "u1", [toolCall("tc1", "bash", { command: "sleep 99" })]),
+    ompReply("a2", "a1", [], { stopReason: "aborted", usage: { totalTokens: 40 } }, 3),
+  ], "omp");
+  expect(c.doing).toBe(null);
+  expect(c.waiting).toBe(false);
+  expect(c.open.size).toBe(0);
+});
+
+test("an omp entry that is a root of its own starts the conversation there", async () => {
+  const c = await read([
+    ...ompHeads,
+    ompUser("u1", "s0", "Hello"),
+    ompReply("a1", "u1", [words("An answer.")]),
+    ompUser("u2", null, "A new start", 4),   // parentId: null, a root of its own
+  ], "omp");
+  expect(c.items.map((x) => x.kind)).toEqual(["user"]);
+  expect(c.items[0].text).toBe("A new start");
+  expect(c.ompChain).toEqual(["u2"]);
+});
+
+test("omp: feeding its log as it arrives equals feeding it whole, across a step's answer", async () => {
+  const lines = [
+    ...ompHeads,
+    ompUser("u1", "s0", "Look at the file"),
+    ompReply("a1", "u1", [words("Reading it."), toolCall("tc1", "read", { path: "src/a.js", i: "Reading a" })]),
+    ompResult("r1", "a1", "tc1", "one\ntwo", false, 3),
+    ompReply("a2", "r1", [words("Done.")], { stopReason: "stop" }, 4),
+    ompUser("u2", "a2", "Thanks", 5),
+  ];
+  const recs = await recordsOf(lines);
+  const whole = new Conversation("omp");
+  whole.feed(recs);
+  for (let cut = 1; cut < recs.length; cut++) {
+    const inc = new Conversation("omp");
+    inc.feed(recs.slice(0, cut));
+    inc.feed(recs.slice(cut));
+    expect(inc.items).toEqual(whole.items);
+    expect(inc.meta).toEqual(whole.meta);
+    expect(inc.ompChain).toEqual(whole.ompChain);
+    expect(inc.doing).toBe(whole.doing);
+  }
 });

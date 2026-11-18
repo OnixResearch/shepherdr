@@ -48,7 +48,7 @@ export const WORDS = {
   assistantEndedBody: "Restart it to carry on the same conversation here.",
   taskEnded: "This task's agent has ended",
   unsupported: "No chat for this agent",
-  unsupportedBody: "Chat reads Claude Code's and Codex's own session logs. This agent works in its terminal only.",
+  unsupportedBody: "Chat reads Claude Code's, Codex's and omp's own session logs. This agent works in its terminal only.",
   notFound: "Can't find this conversation",
   notFoundBody: "Chat reads the agent's own session log, and Herdr can't tell which one this agent writes. Rather than show the wrong one, it shows none.",
   noAgent: "No agent to show",
@@ -224,7 +224,7 @@ export function sentTo(x, sender = (f) => f) {
 export function selfName({ assistant = false, task = null, kind = null } = {}) {
   if (assistant) return "Assistant";
   if (task) return task;
-  return { claude: "Claude", codex: "Codex" }[kind] ?? "Agent";
+  return { claude: "Claude", codex: "Codex", omp: "omp" }[kind] ?? "Agent";
 }
 
 // A name's initial for its avatar: a task ref's letters ("SHEP-4" → "S"), else its first letter.
@@ -393,13 +393,13 @@ function parentAddr(k) {
   return m && !p.includes("/") ? `${m}/${p}` : p;
 }
 
-const AGENTS = { codex: "Codex", claude: "Claude Code", "claude-code": "Claude Code", pi: "Pi" };
+const AGENTS = { codex: "Codex", claude: "Claude Code", "claude-code": "Claude Code", omp: "omp", pi: "Pi" };
 // its CLI: its herdr.agent label, else what hc says runs in it, else its command's name
 export function subagentCli(k) {
   const a = k?.labels?.["herdr.agent"] ?? k?.agent ?? null;
   if (a) return String(a).replace(/^claude-code$/, "claude");
   const argv = k?.foreground?.argv ?? k?.argv ?? [];
-  const prog = argv.map((x) => String(x).split("/").pop()).find((x) => /^(claude|codex|pi)$/.test(x));
+  const prog = argv.map((x) => String(x).split("/").pop()).find((x) => /^(claude|codex|omp|pi)$/.test(x));
   return prog ?? null;
 }
 
