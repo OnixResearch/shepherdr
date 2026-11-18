@@ -123,7 +123,7 @@ BEGIN { pos = base; first = base; msgs = 0 }
   }
   # A tool result of omp: its call is answered (its output stays in the file, read when the row
   # opens); a failed one says so, for the row.
-  if (omp && index(head, "\"role\":\"toolResult\"")) {
+  if (omp && index(line, "\"role\":\"toolResult\"")) {
     # onix: omp tool results
     if (count) next
     m = ""
@@ -152,7 +152,7 @@ BEGIN { pos = base; first = base; msgs = 0 }
     keep = 1
   } else if (omp) {
     # onix: omp messages
-    if (index(head, "\"role\":\"user\"") || index(head, "\"role\":\"assistant\"")) keep = 1
+    if (index(line, "\"role\":\"user\"") || index(line, "\"role\":\"assistant\"")) keep = 1
   }
   if (!keep) next
   if (index(line, "\"type\":\"text\"") || index(line, "\"role\":\"user\",\"content\":\"") || (index(head, "\"type\":\"message\"") && !omp)) msgs++
