@@ -28,6 +28,8 @@ from .tick import end_done_pass, lost_logs_pass, memory_guard, retry_pass, tick_
 from .backups import backup_pass
 from .machines import machines_pass
 from .takeover import cli_check_pass
+# onix: Kiln, the post-merge CI of Onix repos (kiln.py): its round, and its task news.
+from .kiln import kiln_pass, kiln_tell, waiting as kiln_waiting
 
 
 # ---- automations ----------------------------------------------------------------------------
@@ -678,12 +680,18 @@ def one_pass(report):
         for d in lists:
             tasks = d.get("tasks") or []
             busy = any(t.get("state") in ("queued", "scheduled") or (t.get("worktree") and t.get("state") in ("running", "ready")) for t in tasks)
+            # onix: a merged task still waits on Kiln's answer, so its folder is looked at too.
+            busy = busy or any(kiln_waiting(t) for t in tasks)
             if not busy and not d.get("automations"):
                 continue
             with Store(locate(d["folder"])) as s:
                 seen = seen_all.setdefault(s.slug, {})
                 automations_pass(s, seen, report, feeds)
                 tick_store(s, report)
+                try:  # onix: Kiln's answer for a merged commit (off until onix.kiln.machine is set)
+                    kiln_pass(s, report)
+                except Exception as e:  # never stops the scheduler
+                    print(f"{time.strftime('%H:%M:%S')} kiln: {e}", flush=True)
         try:
             retry_pass(report)
         except Exception as e:  # never stops the scheduler
@@ -696,6 +704,10 @@ def one_pass(report):
             news_pass(report)
         except Exception as e:  # never stops the scheduler
             print(f"{time.strftime('%H:%M:%S')} news: {e}", flush=True)
+        try:  # onix: the task news kiln_pass queued, from a folder that may not be looked at again
+            kiln_tell(report)
+        except Exception as e:  # never stops the scheduler
+            print(f"{time.strftime('%H:%M:%S')} kiln news: {e}", flush=True)
         try:
             end_done_pass(report)
             memory_guard(report)
