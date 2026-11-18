@@ -12,7 +12,20 @@ from .base import Fail, git, HOME, MAX_RUNNING, WHERE
 
 
 # What each agent key starts by default. Unknown keys run as themselves; --argv overrides.
-AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"]}
+# onix: omp (OnixResearch's agent CLI) starts as itself: its model and approval mode come from argv_for.
+AGENTS = {"claude": ["claude"], "codex": ["codex", "--no-daemon"], "omp": ["omp"]}
+# onix: omp has no permission modes of claude's shape; each Herdr permission picks the nearest approval
+# mode (`--approval-mode`, omp's tools.approvalMode override). omp 18.22's own words:
+#   always-ask        auto-approves read-only tools, asks before write and exec tools
+#   always-ask-cached "Ask and remember": also asks before a file read, remembering the file or folder
+#   write             auto-approves read-only and write tools, asks before exec tools (bash, eval, task)
+#   yolo              auto-approves all three tiers (a user tool policy may still prompt or block)
+# Herdr's Ask is omp's ask-and-remember (the closest to Claude Code's "default"); Auto/Accept edits is
+# Write; Plan and Read only are read-only, so they ask (there is no read-only flag); Full access is Yolo.
+OMP_PERM = {"manual": "always-ask-cached", "auto": "write", "acceptEdits": "write", "plan": "always-ask-cached",
+            "read-only": "always-ask-cached", "bypassPermissions": "yolo", "full": "yolo",
+            "always-ask": "always-ask", "always-ask-cached": "always-ask-cached", "write": "write", "yolo": "yolo"}
+OMP_THINKING = {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}
 
 
 # ---- the person's settings ------------------------------------------------------------------
@@ -197,6 +210,25 @@ def argv_for(pick):
         elif perm:
             a += ["-s", "workspace-write", "-a", "on-request"]
         return a
+    if agent == "omp":
+        # onix: omp --model takes provider/id and reads anything after a ":" as a thinking level
+        # (`model:high`); only `:free` ids are models of their own, so any other colon id is refused.
+        a = ["omp"]
+        model = str(pick.get("model") or "")
+        if model:
+            if ":" in model and not model.endswith(":free"):
+                raise Fail(f"omp reads {model} as a thinking level: give its model as <provider>/<id> "
+                           "(only a model:free id keeps its colon).")
+            a += ["--model", model]
+        effort = pick.get("effort")
+        if effort:
+            if effort not in OMP_THINKING:
+                raise Fail(f"omp's --thinking is one of {', '.join(sorted(OMP_THINKING))}, not {effort!r}.")
+            a += ["--thinking", effort]
+        # Always said when a permission is set, and Ask when none is: omp's own default is yolo, and a
+        # task's worker must never start with more access than the person gave it.
+        a += ["--approval-mode", OMP_PERM.get(str(pick.get("perm") or "manual"), "always-ask-cached")]
+        return a
     return [agent] if agent else None
 
 
@@ -235,6 +267,8 @@ def argv_model(argv):
             model = nxt
         elif a == "--effort":
             effort = nxt
+        elif a == "--thinking":  # onix: omp's thinking level is its effort
+            effort = nxt
         elif a in ("-c", "--config") and nxt.startswith("model_reasoning_effort="):
             effort = nxt.split("=", 1)[1].strip("\"'")
     return model, effort
@@ -271,7 +305,8 @@ MERGE_VALUES = {"ask": "ask", "ask me first": "ask", "ask first": "ask", "ask th
                 "auto": "auto", "on its own": "auto", "merge it": "auto", "at once": "auto"}
 MUST_VALUES = {"blocker": "blocker", "blockers": "blocker", "critical": "blocker", "major": "major",
                "minor": "minor", "trivial": "minor", "everything": "minor"}
-EFFORTS = {"none", "minimal", "lowest", "low", "medium", "high", "xhigh", "max", "ultra"}
+# onix: off and auto are omp's own --thinking levels beside the others (argv_for checks them for omp).
+EFFORTS = {"none", "minimal", "lowest", "low", "medium", "high", "xhigh", "max", "ultra", "off", "auto"}
 ONOFF = {"on": "on", "yes": "on", "true": "on", "1": "on", "off": "off", "no": "off", "false": "off", "0": "off"}
 
 
@@ -351,7 +386,9 @@ def cli_here(kind):
     return (((read_checks().get("machines") or {}).get("") or {}).get(kind))
 
 
-CLI_NAMES = {"claude": "Claude Code", "codex": "Codex"}
+# onix: omp signs in nowhere of its own (its providers are configured inside omp): it is ready when the
+# `omp` program is on PATH, and there is no login command to offer.
+CLI_NAMES = {"claude": "Claude Code", "codex": "Codex", "omp": "omp"}
 LOGIN = {"claude": "claude auth login", "codex": "codex login"}
 
 
@@ -380,7 +417,8 @@ CLAUDE_MODEL = re.compile(r"^(claude-|opus|sonnet|haiku|fable)", re.I)
 def check_reviewer_model(t):
     """add/edit: a reviewer model Codex here can't use is refused when it is set (#948), not found at review time."""
     m = t.get("reviewer_model")
-    if not m or t.get("reviewer") == "claude" or (not t.get("reviewer") and CLAUDE_MODEL.match(m)):
+    # onix: a reviewer on omp (or claude) is no Codex model, so Codex's catalog says nothing about it.
+    if not m or t.get("reviewer") in ("claude", "omp") or (not t.get("reviewer") and CLAUDE_MODEL.match(m)):
         return
     ids = codex_lacks(m)
     if ids:
@@ -440,6 +478,13 @@ def reviewer_command(who, model=None, effort=None, folder=None):
         a = ["claude", "--permission-mode", "plan"]
         a += ["--model", model] if model else []
         a += ["--effort", effort] if effort else []
+    elif who == "omp":
+        # onix: omp has no read-only sandbox flag. always-ask-cached ("ask and remember") asks before a
+        # read, a write or an exec, so a reviewer never changes anything on its own; the reviewer brief
+        # already says read-only, and a check it can't run is one it names for its worker (#840's rule).
+        a = ["omp", "--approval-mode", "always-ask-cached"]
+        a += ["--model", model] if model else []
+        a += ["--thinking", effort] if effort else []
     else:
         return None
     return shlex.join(a)
@@ -482,6 +527,8 @@ def task_settings(s, t, space=None, argv=None, live=False):
         for f in ("model", "effort"):
             if t.get(f"reviewer_{f}"):
                 rv[f] = t[f"reviewer_{f}"]
+        # onix: only claude and codex stand in for each other; an omp task never cross-picks to, or
+        # from, another CLI by itself (the person sets its reviewer or backup by name).
         other = {"claude": "codex", "codex": "claude"}.get(agent)
         want = rv.get("agent") or (other if other and shutil.which(other) else agent)
         who, said = want, ""

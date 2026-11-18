@@ -20,8 +20,8 @@ import shlex
 from .base import HOME, hc_json, now, run, SHELLS
 from .agents import agent_running, status_word
 from .sessions import session_of
-from .settings import ASSISTANT_TEMPLATES
-from .launch import CLEAN_ENV
+from .settings import ASSISTANT_TEMPLATES, agent_key
+from .launch import AGENT_ENV, CLEAN_ENV
 
 LABEL = "herdr.resume"
 # Claude Code: "No conversation found with session ID: …". Codex: "ERROR: No saved session found with ID …"
@@ -44,15 +44,19 @@ CLAUDE_VALUE = {"--add-dir", "--mcp-config", "--append-system-prompt", "--system
                 "--model", "--effort", "--settings", "--permission-mode"}
 CODEX_VALUE = {"-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
                "-C", "--cd", "--add-dir", "-i", "--image", "--enable", "--disable", "--local-provider", "--oss"}
+# onix: omp's flags whose next word is their value, kept when its argv starts again.
+OMP_VALUE = {"--model", "--thinking", "--approval-mode", "--session-dir", "--cwd", "--profile", "--mode", "--config",
+             "--add-dir", "--smol", "--slow", "--plan", "--provider", "--tools", "--models", "--max-time",
+             "--service-tier", "--system-prompt", "--append-system-prompt", "--hook", "--extension", "-e"}
 
 
 def kind_of(word):
     b = os.path.basename(str(word))
-    return b if b in ("claude", "codex") else None
+    return b if b in ("claude", "codex", "omp") else None
 
 
 def base_argv(argv):
-    """(kind, argv) for starting the agent in `argv` again: from its claude or codex word on, without
+    """(kind, argv) for starting the agent in `argv` again: from its claude, codex or omp word on, without
     what resumed a conversation or its first message (core/agents.js freshArgv), or (None, None)."""
     argv = list(argv or [])
     at = next((i for i, a in enumerate(argv) if (i == 0 or not str(a).startswith("-")) and kind_of(a)), None)
@@ -70,6 +74,19 @@ def base_argv(argv):
                 i += 1
                 continue
             if a in CLAUDE_VALUE and i + 1 < len(rest):
+                out += [a, rest[i + 1]]
+                i += 2
+                continue
+        elif kind == "omp":
+            # onix: omp --resume/--restore take a session id prefix or a file, --session=<id> too, and a
+            # bare --continue/-c continues the last one: all of it is what starting again replaces.
+            if a in ("--resume", "-r", "--restore", "--session"):
+                i += 2 if i + 1 < len(rest) and not rest[i + 1].startswith("-") else 1
+                continue
+            if re.match(r"^--(resume|restore|session)=", a) or a in ("--continue", "-c"):
+                i += 1
+                continue
+            if a in OMP_VALUE and i + 1 < len(rest):
                 out += [a, rest[i + 1]]
                 i += 2
                 continue
@@ -96,7 +113,16 @@ def resume_argv(kind, argv, session, message=None):
     tail = [message] if message else []
     if kind == "claude":
         return [*argv, "--resume", session, *tail]
+    if kind == "omp":
+        # onix: after a crash an omp gets --restore, not --resume: it resumes the session and goes on with
+        # what the last process left unfinished (the interrupted turn, the subagents it was running).
+        return [*argv, "--restore", session, *tail]
     return [argv[0], "resume", *argv[1:], session, *tail]
+
+
+def session_word(rec):
+    """What resuming rec names: onix, an omp resumes by its session file's path; claude and codex by id."""
+    return rec.get("log") if rec.get("kind") == "omp" and rec.get("log") else rec.get("session")
 
 
 def lost_message(ref=None, template=None):
@@ -131,8 +157,11 @@ def shell_line(shell, cwd, env, argv, direct=False):
     cmd = f"{pre} {words}" if pre else words
     line = f"cd {shlex.quote(cwd)} && {cmd}" if cwd else cmd
     # The recovered shell has the holder's environment: clear a parent Claude Code session's markers
-    # first (SHEP-86, launch.CLEAN_ENV; POSIX shells: fish has no for-in-do).
-    return line if os.path.basename(shell or "") == "fish" else f"{CLEAN_ENV} {line}"
+    # first (SHEP-86, launch.CLEAN_ENV; POSIX shells: fish has no for-in-do), then a parent omp session's
+    # for an omp (onix: launch.AGENT_ENV).
+    if os.path.basename(shell or "") == "fish":
+        return line
+    return f"{CLEAN_ENV} {AGENT_ENV + ' ' if argv and agent_key(argv) == 'omp' else ''}{line}"
 
 
 def read_record(k):
@@ -263,7 +292,7 @@ def plan(k, rec, running):
     if rec and rec.get("session") and rec["session"] in running:
         return ("running", None, False)
     if rec and rec.get("session") and rec.get("log") and os.path.isfile(rec["log"]):
-        return ("resume", resume_argv(rec["kind"], rec["argv"], rec["session"], CUT if rec.get("working") else None), not rec.get("shell"))
+        return ("resume", resume_argv(rec["kind"], rec["argv"], session_word(rec), CUT if rec.get("working") else None), not rec.get("shell"))
     # Its session is gone: a new one, with the handover (and an Assistant's role, its template's words).
     command, template = template_of() if assistant else (None, None)
     argv = (rec or {}).get("argv") or (shlex.split(command) if command else None)

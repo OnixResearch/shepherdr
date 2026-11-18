@@ -378,8 +378,8 @@ def log_lines(log, size=262144):
 
 
 def log_tail(log, size=262144):
-    """The last lines of an agent's session log (Claude Code's or Codex's JSONL), parsed; [] when
-    it can't be read. A first line cut in half is left out."""
+    """The last lines of an agent's session log (Claude Code's, Codex's or omp's JSONL), parsed; [] when
+    it can't be read. A first line cut in half is left out, and an omp log's abandoned branches too."""
     out = []
     for raw in log_lines(log, size):
         try:
@@ -388,7 +388,33 @@ def log_tail(log, size=262144):
             continue
         if isinstance(d, dict):
             out.append(d)
-    return out
+    return omp_live(out) if any(is_omp(d) for d in out) else out
+
+
+# onix: an omp session log is a tree: every entry has an id and a parentId, and the live conversation is
+# the chain from the newest entry back to its root (a rewind or a retried turn leaves entries on an
+# abandoned branch). Its records are `message` entries whose message.role is user, assistant or
+# toolResult; nothing else is a message.
+OMP_ROLES = {"user", "assistant", "toolResult"}
+
+
+def is_omp(d):
+    """Whether d is an omp session log's message record."""
+    m = d.get("message")
+    return d.get("type") == "message" and isinstance(m, dict) and m.get("role") in OMP_ROLES
+
+
+def omp_live(out):
+    """An omp log's live conversation: the chain from its newest entry back through parentId to the root,
+    oldest first, with entries on abandoned branches left out."""
+    by_id = {d["id"]: d for d in out if isinstance(d.get("id"), str) and "parentId" in d}
+    tail = next((d for d in reversed(out) if d.get("id") in by_id), None)
+    chain, seen = [], set()
+    while tail is not None and tail["id"] not in seen:
+        seen.add(tail["id"])
+        chain.append(tail)
+        tail = by_id.get(tail.get("parentId"))
+    return chain[::-1]
 
 
 def agent_log(task, address=None):
@@ -397,7 +423,14 @@ def agent_log(task, address=None):
 
 
 def said(d):
-    """An assistant line's words (Claude Code's, or Codex's response item), or None for anything else."""
+    """An assistant line's words (Claude Code's, Codex's response item, or omp's assistant message), or
+    None for anything else: thinking and tool calls are no words."""
+    if is_omp(d):
+        m = d["message"]
+        if m.get("role") != "assistant":
+            return None
+        parts = [c.get("text") for c in m.get("content") or [] if isinstance(c, dict) and c.get("type") == "text"]
+        return "\n".join(x for x in parts if x).strip()
     msg = d.get("message") if d.get("type") == "assistant" and not d.get("isSidechain") and not d.get("isApiErrorMessage") else None
     if d.get("type") == "response_item" and (d.get("payload") or {}).get("role") == "assistant":
         msg = d["payload"]
@@ -409,6 +442,16 @@ def said(d):
 
 def from_person(d):
     """A line that is someone writing to the agent (not a tool's result): its words, else None."""
+    if is_omp(d):
+        m = d["message"]
+        if m.get("role") != "user":
+            return None  # a tool's result is its own role in omp's log
+        c = m.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "\n".join(x.get("text") or "" for x in c if isinstance(x, dict) and x.get("type") == "text")
+        return None
     if d.get("type") == "user" and not d.get("isSidechain"):
         c = (d.get("message") or {}).get("content")
         if isinstance(c, str):
@@ -526,9 +569,18 @@ def permission_words(tool, value, cwd=None):
         r = f[len(cwd) + 1:] if cwd and f.startswith(cwd + "/") else "~" + f[len(HOME):] if f.startswith(HOME + "/") else f
         return r if len(r) <= 32 else os.path.basename(f)
     first = lambda x: str(x or "").split("\n")[0]
-    if tool == "Bash" or (tool in ("shell", "exec_command", "local_shell") and value.get("command")):
+    if tool == "Bash" or (tool in ("shell", "exec_command", "local_shell", "bash", "sh") and value.get("command")):
         cmd = value.get("command") or value.get("cmd")
         return f"Run: {first(' '.join(cmd) if isinstance(cmd, list) else cmd)}" if cmd else None
+    # onix: omp's own tools (read, write, edit, grep, glob, web_search name their arguments plainly)
+    if tool in ("read", "write") and value.get("path"):
+        return f"{tool[:1].upper() + tool[1:]} {rel(value['path'])}"
+    if tool == "edit" and (value.get("path") or value.get("file_path")):
+        return f"Edit {rel(value.get('path') or value.get('file_path'))}"
+    if tool in ("grep", "glob") and value.get("pattern"):
+        return f"Search for {value['pattern']}"
+    if tool == "web_search" and value.get("query"):
+        return f"Search the web: {value['query']}"
     if tool in ("Write", "Read"):
         return f"{tool} {rel(value.get('file_path'))}" if value.get("file_path") else None
     if tool in ("Edit", "MultiEdit", "NotebookEdit"):
@@ -558,6 +610,16 @@ def ask_reason(task, address, req=None, kind=None, msg=None):
     if not tool:
         done, pending = set(), None
         for d in log_tail(agent_log(task, address), 131072):
+            if is_omp(d):
+                m = d["message"]
+                if m.get("role") == "toolResult":
+                    done.add(m.get("toolCallId"))
+                elif m.get("role") == "assistant":
+                    for x in m.get("content") or []:
+                        if isinstance(x, dict) and x.get("type") == "toolCall":
+                            args = x.get("arguments")
+                            pending = {"id": x.get("id"), "name": x.get("name"), "input": args if isinstance(args, dict) else {}}
+                continue
             c = (d.get("message") or {}).get("content") if d.get("type") in ("assistant", "user") and not d.get("isSidechain") else None
             for x in c if isinstance(c, list) else []:
                 if isinstance(x, dict) and x.get("type") == "tool_result":
@@ -577,7 +639,7 @@ def ask_reason(task, address, req=None, kind=None, msg=None):
             tool, value = pending.get("name"), pending.get("input") if isinstance(pending.get("input"), dict) else {}
     if tool == "ExitPlanMode":
         return REASONS["plan"]
-    if tool in ("AskUserQuestion", "request_user_input"):
+    if tool in ("AskUserQuestion", "request_user_input", "ask"):
         qs = value.get("questions") if isinstance(value.get("questions"), list) else []
         q = qs[0].get("question") if qs and isinstance(qs[0], dict) else None
         return fit(q) if q else REASONS["question"]
@@ -648,6 +710,10 @@ BG_LOG_BYTES = 64 * 1048576  # a first look at a log reads at most this much of 
 # (a foreground command times out at 10 minutes) no longer counts as running.
 TOOL_USE = re.compile(r'"type":\s*"tool_use",\s*"id":\s*"([^"]+)",\s*"name":\s*"([^"]+)"')
 TOOL_DONE = re.compile(r'"tool_use_id":\s*"([^"]+)"')
+# onix: omp's own records (compact JSON): a toolCall block of an assistant message opens, a toolResult
+# message's toolCallId closes. Only those lines are read as such, so a toolResult's details never reopens one.
+OMP_TOOL_CALL = re.compile(r'"type":\s*"toolCall",\s*"id":\s*"([^"]+)",\s*"name":\s*"([^"]+)"')
+OMP_TOOL_DONE = re.compile(r'"toolCallId":\s*"([^"]+)"')
 TIMESTAMP = re.compile(r'"timestamp":\s*"([^"]+)"')
 SIDECHAIN = re.compile(r'"isSidechain":\s*true')
 FG_MAX_MS = 15 * 60000
@@ -731,7 +797,7 @@ def open_tool(log):
     calls = c.get("open") or {}
     for i in [i for i, (_, at) in calls.items() if now() - at >= FG_MAX_MS]:
         calls.pop(i)
-    mine = [x for x in calls.values() if x[0] not in ("AskUserQuestion", "ExitPlanMode")]
+    mine = [x for x in calls.values() if x[0] not in ("AskUserQuestion", "ExitPlanMode", "ask")]
     return max(mine, key=lambda x: x[1]) if mine else None
 
 
@@ -742,6 +808,15 @@ def _bg_scan(lines, seen):
     cells = seen.setdefault("cells", {})  # Codex code-mode cell id -> the session ids its wait polls
     opened = seen.setdefault("open", {})
     for raw in lines:
+        # onix: omp's entries, the assistant turn that opened a toolCall and the turn that answered it
+        head = raw[:300]
+        if '"role":"assistant"' in head or '"role": "assistant"' in head:
+            stamp = TIMESTAMP.search(raw)
+            for m in OMP_TOOL_CALL.finditer(raw):
+                opened[m.group(1)] = (m.group(2), (_ms(stamp.group(1)) if stamp else None) or now())
+        elif '"role":"toolResult"' in head or '"role": "toolResult"' in head:
+            for m in OMP_TOOL_DONE.finditer(raw):
+                opened.pop(m.group(1), None)
         # Claude Code keeps a copy of each request it sends (api-request-blob): every call and
         # result so far again, never news of one.
         if '"api-request' in raw[:200]:

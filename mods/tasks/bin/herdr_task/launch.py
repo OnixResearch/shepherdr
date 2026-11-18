@@ -91,6 +91,10 @@ def own_argv(argv, folder=None):
     still asks on the card; ask-hook.sh's own copy steps aside for it."""
     path, out = own_path(), list(argv)
     k = agent_key(out)
+    if k == "omp":
+        # onix: omp takes no permission hook and has no allowlist flag: its approval mode, which argv_for
+        # always says (--approval-mode), is all a launch can give it. Nothing else is added here.
+        return out
     if k == "claude":
         rules = own_rules(path)
         hook = {"hooks": [{"type": "command", "command": ask_command(path), "timeout": ASK_TIMEOUT}]}
@@ -234,7 +238,11 @@ def own_command(path, text, sandboxed=False):
 REVIEWERS = {"codex": (["codex", "--no-daemon", "--sandbox", "read-only", "--ask-for-approval", "never"],
                        {"--disable": re.compile(r"hooks"), "-m": re.compile(r"[\w.:-]+"),
                         "-c": re.compile(r'projects=\{.*\}|model_reasoning_effort="?\w+"?', re.S)}),
-             "claude": (["claude", "--permission-mode", "plan"], {"--model": re.compile(r"[\w.:\[\]-]+"), "--effort": re.compile(r"\w+")})}
+             "claude": (["claude", "--permission-mode", "plan"], {"--model": re.compile(r"[\w.:\[\]-]+"), "--effort": re.compile(r"\w+")}),
+             # onix: omp's reviewer asks before every read, write and exec (settings.reviewer_command).
+             "omp": (["omp", "--approval-mode", "always-ask-cached"],
+                     {"--model": re.compile(r"[\w.:/\[\]-]+"), "--thinking": re.compile(r"\w+"),
+                      "--approval-mode": re.compile(r"[\w-]+")})}
 HELPER = re.compile(r"[\w.-]+-(?:review|helper)(?:-[\w.-]+)?")
 
 
@@ -252,7 +260,7 @@ def helper_hc(words):
             j += 1
         elif opts[j] == "--name" and j + 1 < len(opts) and HELPER.fullmatch(opts[j + 1]):
             j += 2
-        elif opts[j] == "--label" and j + 1 < len(opts) and re.fullmatch(r"herdr\.(?:task=[\w#.@-]+|role=(?:reviewer|helper)|agent=(?:codex|claude))", opts[j + 1]):
+        elif opts[j] == "--label" and j + 1 < len(opts) and re.fullmatch(r"herdr\.(?:task=[\w#.@-]+|role=(?:reviewer|helper)|agent=(?:codex|claude|omp))", opts[j + 1]):
             j += 2
         else:
             return False
@@ -371,6 +379,10 @@ def resume_argv(argv, session, folder=None):
         return argv + ([] if has else ["--permission-mode", mode]) + ["--resume", session]
     if k == "codex":
         return [argv[0], "resume"] + argv[1:] + [session]
+    if k == "omp":
+        # onix: `omp --resume <session>` takes the id prefix or the session file's path, and the model,
+        # thinking level and approval mode stay as this argv says them (a resumed session keeps them).
+        return argv + ["--resume", session]
     return None
 
 
@@ -386,10 +398,17 @@ def resume_argv(argv, session, folder=None):
 CLEAN_ENV = ("for v in $(env | sed -nE 's/^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_[A-Za-z0-9_]+)=.*/\\1/p' | "
              "grep -vE '^CLAUDE_CODE_(USE|SKIP|DISABLE|ENABLE|MAX|OAUTH|CLIENT|API)_'); do unset \"$v\"; done;")
 
+# onix: nor a parent omp session's. An omp started from inside another omp inherits PI_SESSION_FILE and
+# PI_SESSION_ID and attaches to the parent's session file, and OMPCODE=1 silences omp's herdr status
+# extension (the task would read "working" forever). Kept beside CLEAN_ENV, not in it: CLEAN_ENV is the
+# one line core/clean-env.js and mods/coordinator/restart.sh carry verbatim (test_herdr_task keeps them
+# equal), so each place clears these names beside it rather than inside it.
+AGENT_ENV = "unset PI_SESSION_FILE PI_SESSION_ID OMPCODE;"
+
 
 def clean_env(argv):
-    """argv run without a parent Claude Code session's markers (CLEAN_ENV)."""
-    return ["sh", "-c", CLEAN_ENV + ' exec "$@"', "herdr-clean", *argv]
+    """argv run without a parent Claude Code session's markers (CLEAN_ENV) nor a parent omp one's (AGENT_ENV)."""
+    return ["sh", "-c", f"{CLEAN_ENV} {AGENT_ENV}" + ' exec "$@"', "herdr-clean", *argv]
 
 
 def in_shell(argv):
@@ -538,7 +557,8 @@ def retag_tabs(s):
 
 def closing_line(s, task, parent=None, argv=None):
     """How the worker finishes: every task, worktree or in the folder, says ready with a summary.
-    It names this herdr-task by its full path: only that form runs without asking (own_argv)."""
+    It names this herdr-task by its full path: only that form runs without asking (own_argv), and on omp
+    (which has no permission hook) the person's yes is what covers it, said as such."""
     done = "finished and committed" if task.get("mode") == "worktree" else "finished"
     ht = own_path()
     text = (f"When the work is {done}, run `{ht} ready {s.ref(task)} --folder {shlex.quote(s.loc['folder'])} "
@@ -561,12 +581,21 @@ def closing_line(s, task, parent=None, argv=None):
         text += (f" A problem in Shepherdr itself, not this task's code: `{ht} feedback \"<one line>\" --details \"<goal, what was "
                  f"tried, what went wrong, expected, suggested fix>\"` returns at once and your Assistant offers the person to file "
                  f"it; carry on.")
-    text += (f" Your herdr-task command is {ht}: write that full path each time (never the bare name), as one plain command; "
-             f"then its {', '.join(OWN)} commands run without asking.")
+    if argv and agent_key(argv) == "omp":
+        # onix: omp has no permission hook to allow these by, so never promise they run without asking: its
+        # approval mode may ask, and always-ask-cached remembers the folder once the person approves.
+        text += (f" Your herdr-task command is {ht}: write that full path each time (never the bare name), as one plain command "
+                 f"({', '.join(OWN)} are its own commands). omp may first ask to approve running it: the person's yes is "
+                 f"remembered for this folder and the rest of the session, then they run.")
+    else:
+        text += (f" Your herdr-task command is {ht}: write that full path each time (never the bare name), as one plain command; "
+                 f"then its {', '.join(OWN)} commands run without asking.")
     text += browser_line()
     if secret_path():
         text += (" Secrets (keys, tokens, passwords) are used by name, never seen: `herdr-secret ask NAME --why \"…\"` "
-                 "(then end your turn), `herdr-secret run NAME -- <command>`, `herdr-secret list`; these run without asking too.")
+                 "(then end your turn), `herdr-secret run NAME -- <command>`, `herdr-secret list`"
+                 + ("; omp may ask once to approve these too." if argv and agent_key(argv) == "omp"
+                    else "; these run without asking too."))
     if argv and agent_key(argv) == "codex":
         text += (" Codex's sandbox can't reach Herdr nor write git's data, so give those commands, herdr-artifact's (your proof), "
                  "`git add`/`git commit` and your review's `hc run`/`hc wait`/`hc read`/`hc kill` (its prompt in single quotes) "
