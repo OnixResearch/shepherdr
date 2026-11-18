@@ -20,7 +20,8 @@ import { codexChoice } from "../core/asks.js";
 const { SCREEN } = SCc as any;
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-const CLI_NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex" };
+// onix: omp is a CLI of its own (core/agents.js NAMES)
+const CLI_NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex", omp: "omp" };
 import * as MNc from "../core/menus.js";
 import * as APc from "../core/autopilot.js";
 const { machineLabel } = MNc as any;
@@ -238,7 +239,7 @@ export class Compat {
   /** The model menu and restarts (service/agents.ts), set by main. */
   /** The agent Shepherdr settings choose for a space's Assistant (main.ts: Settings.role), for a start from the web. */
   assistantPick: ((space: string) => any) | null = null;
-  agents: { info(addr: string, reader: any): Promise<unknown>; restart(addr: string, reader: any, pick: any): Promise<string>; choices(machine: string | null): Promise<unknown>; ownDefaults(): Promise<{ claude: unknown; codex: unknown }> } | null = null;
+  agents: { info(addr: string, reader: any): Promise<unknown>; restart(addr: string, reader: any, pick: any): Promise<string>; choices(machine: string | null): Promise<unknown>; ownDefaults(): Promise<{ claude: unknown; codex: unknown; omp?: unknown }> } | null = null;   // onix: omp too
 
   /** Agents' secret asks (service/secrets.ts), set by main. */
   secrets: { asks(): { address: string; name: string; why: string }[] } | null = null;
