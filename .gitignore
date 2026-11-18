@@ -6,3 +6,6 @@ jsconfig.json
 node_modules/
 web/dist/
 web/generated/
+
+# onix: local list of private host/account names for test_repo (never committed)
+test/private-patterns.txt

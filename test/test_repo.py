@@ -80,10 +80,16 @@ class Repo(unittest.TestCase):
     def test_nothing_personal(self):
         # The upstream repo's public name is fine (feedback's default repo, SHEP-78); the account elsewhere isn't.
         bad = re.compile(r"/home/\w|/Users/\w|eliasstravik(?!/shepherdr\b)|\.ts\.net|prospecterra|thekiln|vm-stravik|skills-me")
+        # onix: the fork is public too. Names of the machines and accounts it runs on stay out of it, and so does
+        # their list: one regex per line in the untracked test/private-patterns.txt (.gitignore), checked when present.
+        private = J("test", "private-patterns.txt")
+        lines = [ln.strip() for ln in open(private, encoding="utf-8")] if os.path.exists(private) else []
+        fork = re.compile("|".join(ln for ln in lines if ln and not ln.startswith("#")) or r"(?!)", re.I)
         for p in text_files():
             with open(p, encoding="utf-8", errors="replace") as f:
                 for n, line in enumerate(f, 1):
                     self.assertIsNone(bad.search(line), f"{os.path.relpath(p, ROOT)}:{n}: {line.strip()[:120]}")
+                    self.assertIsNone(fork.search(line), f"{os.path.relpath(p, ROOT)}:{n}: {line.strip()[:120]}")
 
     # Elements and components whose `title` is no hover popup: a dialog's or card's heading, a row's words, an
     # iframe's name for screen readers.

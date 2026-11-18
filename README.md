@@ -1,3 +1,8 @@
+> **OnixResearch fork** of [eliasstravik/shepherdr](https://github.com/eliasstravik/shepherdr). It adds omp agents on
+> Underclass and mesh-llm models, the Underclass pool and mesh-llm in plan limits, and the OnixResearch repo rules
+> (Cairn gates, fast-forward merges with no pull request, Kiln CI after a merge). What differs and how to set it up:
+> [docs/onix.md](docs/onix.md).
+
 <p align="center"><img src="https://img.shields.io/badge/Shepherdr-Mission%20control%20for%20herdr--core-c2410c?style=flat-square&labelColor=09090b" alt="Shepherdr | Mission control for herdr-core" /></p>
 
 <h3 align="center">Manage hundreds of coding agents across your machines from one Herdr window, without the cognitive overload</h3>
