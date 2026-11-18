@@ -3,7 +3,8 @@
 // web app's Settings say the same. herdr-task reads the file (herdr_task/settings.py: settings_for); its defaults are
 // DEFAULTS there and here.
 // Shared core: the source is core/settings.js; bin/sync-shared copies it into the mods in lib/COPIES.
-import { NAMES, levelName, current, rowFor, menuFor, permAcross, speedName, speedFor } from "./agents.js";
+// onix: omp's catalog and its providers setting come from core/agents.js
+import { NAMES, levelName, current, rowFor, menuFor, permAcross, speedName, speedFor, OMP_PROVIDERS, ompProviders } from "./agents.js";
 import { SERVE } from "./host.js";
 
 // ---- the frame -------------------------------------------------------------------------------------------------
@@ -143,14 +144,39 @@ export function modelLabel(menus, sel) {
 }
 // What the agents offer, from each CLI's own settings (agents.js parseDefaults) and which are installed:
 // { menus, permDefault, defaults } (defaults: the first installed CLI's own, what an unset role runs).
-export function choicesFrom(dflts, installed = { claude: true, codex: true }) {
-  const menus = Object.fromEntries(["claude", "codex"].filter((k) => installed[k]).map((k) => [k, menuFor(k, dflts[k])]));
-  const permDefault = { claude: dflts.claude?.mode ?? "manual", codex: "auto" };
+// onix: omp among the agents a role can run
+// omp is offered where its catalog answered (agents.js parseOmpModels: its models are what it has to offer), unless the
+// caller read whether it is installed. A caller's `installed` list is what that machine was checked for: an agent left
+// out of it isn't offered; no list at all leaves Claude Code and Codex on, as before.
+export function choicesFrom(dflts, installed = {}) {
+  const has = (k) => {
+    const said = installed?.[k];
+    if (said !== undefined) return Boolean(said);
+    if (k === "omp") return Boolean(dflts?.omp?.models?.length);
+    return !installed || Object.keys(installed).length === 0;
+  };
+  const menus = Object.fromEntries(["claude", "codex", "omp"].filter(has).map((k) => [k, menuFor(k, dflts?.[k])]));
+  // omp's own default is Claude's mapped across (agents.js PERM_ACROSS): the same level a role runs on with Claude
+  const permDefault = { claude: dflts?.claude?.mode ?? "manual", codex: "auto", omp: permAcross(dflts?.claude?.mode ?? "manual", "omp", { omp: "manual" }) };
   const first = menus.claude ? "claude" : Object.keys(menus)[0] ?? "claude";
-  const c = current(first, [], {}, dflts[first]);
+  const c = current(first, [], {}, dflts?.[first]);
   const model = rowFor(first, c) ?? menus[first]?.models?.[0]?.id ?? null;
   return { menus, permDefault, defaults: { agent: first, model, effort: c.effort ?? null, fast: false, perm: permDefault[first] } };
 }
+
+// onix: the Everywhere setting onix.omp_providers
+// ---- omp's model catalog ----------------------------------------------------------------------------------------
+// Which of omp's providers its models come from: the Everywhere setting onix.omp_providers (a list of provider names,
+// agents.js ompProviders): its model menu offers these providers' chat models only. Shown where Settings shows
+// Everywhere's own rows (the service's Agents page); the window reads the same file, so both fit one value.
+export const OMP_MODELS = {
+  title: "omp providers",
+  about: `Which of omp's providers its models come from. Everywhere's, for every space. Leaving it empty: ${OMP_PROVIDERS.join(", ")}.`,
+  placeholder: OMP_PROVIDERS.join(", "),
+  bad: "Name providers as omp's catalog does, one after the other: underclass, mesh.",
+};
+/** The setting as the agents read it: a settings file's Everywhere value, cleaned (agents.js ompProviders). */
+export const ompProvidersOf = (file) => ompProviders(file?.everywhere?.onix?.omp_providers);
 // What a role's model button starts from: its own choice, else for the Reviewer the other CLI, else the defaults.
 export function roleSel(role, own, choices, worker) {
   if (own) return { sel: { ...own }, unset: false };

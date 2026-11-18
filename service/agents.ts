@@ -6,7 +6,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Hub } from "./hub.ts";
-import { where, writable } from "./paths.ts";
+import { settingsFile, where, writable } from "./paths.ts";
 import { sh } from "./model.ts";
 import { layoutScript } from "./layout-scripts.ts";
 import * as AG from "../core/agents.js";
@@ -14,11 +14,29 @@ import { chatLabel } from "../core/spaces.js";
 import { kindOf } from "../core/chat-reader.js";
 import * as LS from "../core/live-switch.js";
 
-const { DEFAULTS, parseDefaults, current, menuFor, rowFor, argvFor, sessionOf, NAMES, line, PICKS_FILE, parsePicks, pickKey, withPin, withRecent, speedOf, speedWordOf } = AG as any;
+const { DEFAULTS, parseDefaults, parseOmpModels, ompProviders, current, menuFor, rowFor, argvFor, sessionOf, NAMES, line, PICKS_FILE, parsePicks, pickKey, withPin, withRecent, speedOf, speedWordOf } = AG as any;
+/** The agents Shepherdr starts, in the model menus' order. */
+// onix: omp is one of them (core/agents.js NAMES), its catalog read from `omp models --json`
+const KINDS = ["claude", "codex", "omp"];
+/** The permission mode a new agent of each CLI gets unless picked (the CLI's own: Claude Code's settings mode; omp's
+ *  is Claude's mapped across, core/agents.js PERM_ACROSS). */
+function permOf(k: string, claude: { mode?: string | null } | null | undefined): string {
+  if (k === "claude") return claude?.mode ?? "manual";
+  if (k === "omp") return (AG.permAcross(claude?.mode ?? "manual", "omp", { omp: "manual" }) as string | null) ?? "manual";
+  return "auto";
+}
 /** a chat's speed as kept: false, true (Fast) or "ultrafast" */
 const fastOf = (f: unknown) => (f === "ultrafast" ? "ultrafast" : !!f);
 /** the speeds a CLI's models offer: normal, then fast and ultrafast where one has them (SHEP-258) */
 const speedsOf = (models: any[]) => ["normal", ...(models.some((x) => x.fast) ? ["fast"] : []), ...(models.some((x) => x.ultrafast) ? ["ultrafast"] : [])];
+
+/** The CLI a terminal runs: the chat reader's kinds, else the agent's own word in its argv (omp before the reader knows
+ *  it: core/agents.js kindOfArgv). Never another CLI's name for a terminal an agent of its own runs. */
+function kindOfTerm(t: { argv?: string[]; foreground?: { argv?: string[] } } | null | undefined): string | null {
+  return kindOf(t) ?? (AG.kindOfArgv(t?.foreground?.argv ?? t?.argv ?? []) as string | null) ?? null;
+}
+/** One of omp's models, as the menu lists it (core/agents.js parseOmpModels). */
+type OmpModel = { id: string; label: string; efforts: string[]; defaultEffort: string | null; fast: boolean; contextWindow: number | null };
 
 async function run(cmd: string[]) {
   const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
@@ -45,7 +63,26 @@ export class Agents {
     return p;
   }
 
+  // onix: omp's catalog, cached 10 minutes, of the onix.omp_providers setting
+  /** omp's models (its catalog, `omp models --json` on the machine: core/agents.js parseOmpModels, at most once every
+   *  10 minutes) of the providers Shepherdr's settings allow (onix.omp_providers, Everywhere: one list everywhere). */
+  private ompSeen = new Map<string, { at: number; models: OmpModel[] }>();
+  private async omp(machine: string | null): Promise<OmpModel[]> {
+    let providers: string[] = AG.OMP_PROVIDERS;
+    try { providers = ompProviders(JSON.parse(readFileSync(settingsFile(), "utf8"))?.everywhere?.onix?.omp_providers); } catch {}
+    const key = `${machine ?? ""}|${providers.join(",")}`;
+    const was = this.ompSeen.get(key);
+    if (was && Date.now() - was.at < 600_000) return was.models;
+    const r = await sh(this.hub, "omp models --json", ["omp"], machine).catch(() => null);
+    const read: OmpModel[] = r?.code === 0 ? parseOmpModels(r.stdout, providers) : [];
+    const models = read.length ? read : was?.models ?? [];
+    this.ompSeen.set(key, { at: Date.now(), models });
+    return models;
+  }
+
+  // onix: omp's defaults are its catalog
   private async defaults(kind: string, machine: string | null) {
+    if (kind === "omp") return { model: null, effort: null, models: await this.omp(machine) };
     const r = await sh(this.hub, DEFAULTS, ["defaults", kind], machine).catch(() => null);
     return parseDefaults(kind, r?.stdout ?? "");
   }
@@ -69,18 +106,20 @@ export class Agents {
     const t: any = this.hub.terminals.get(addr);
     if (!t) throw new Error("That agent isn't here any more.");
     const machine = addr.includes("/") ? addr.split("/")[0] : null;
-    const kind = kindOf(t) ?? reader?.kind ?? "claude";
-    const [claude, codex, have] = await Promise.all([this.defaults("claude", machine), this.defaults("codex", machine),
-      sh(this.hub, 'for c in "$@"; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done', ["agents", "claude", "codex"], machine).then((r: any) => new Set(String(r?.stdout ?? "").split("\n").filter(Boolean)), () => null)]);
-    const dflts: any = { claude, codex };
+    // omp is its own kind before the chat reader knows it (its argv says so); never read as another CLI
+    const kind = kindOfTerm(t) ?? reader?.kind ?? "claude";
+    const [claude, codex, omp, have] = await Promise.all([this.defaults("claude", machine), this.defaults("codex", machine),
+      this.defaults("omp", machine),
+      sh(this.hub, 'for c in "$@"; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done', ["agents", "claude", "codex", "omp"], machine).then((r: any) => new Set(String(r?.stdout ?? "").split("\n").filter(Boolean)), () => null)]);
+    const dflts: any = { claude, codex, omp };
     let meta = reader?.conv?.meta ?? {};
     // a resumed conversation's log names the model it ran on before: until this process writes, its arguments say
     if (t.created_ms && meta.at && meta.at < t.created_ms) meta = { used: meta.used, window: meta.window };
     const c = current(kind, t.foreground?.argv ?? t.argv ?? [], meta, dflts[kind]);
     const row = rowFor(kind, c);
-    const menus = Object.fromEntries(["claude", "codex"].filter((k) => k === kind || !have || have.has(k)).map((k) => [k, menuFor(k, dflts[k], k === kind ? row : null)]));
+    const menus = Object.fromEntries(KINDS.filter((k) => k === kind || !have || have.has(k) || Boolean(dflts[k]?.models?.length && k === "omp")).map((k) => [k, menuFor(k, dflts[k], k === kind ? row : null)]));
     return { current: { agent: kind, model: row, effort: c.effort ?? null, fast: fastOf(c.fast), perm: c.perm ?? null }, menus,
-      permDefault: { claude: claude?.mode ?? "manual", codex: "auto" }, picks: this.picks(), offline: machine && !(await this.reachable(machine)) ? machine : null };
+      permDefault: { claude: claude?.mode ?? "manual", codex: "auto", omp: permOf("omp", claude) }, picks: this.picks(), offline: machine && !(await this.reachable(machine)) ? machine : null };
   }
 
   /** whether another machine answers now (hc machine ls: connected) */
@@ -91,15 +130,17 @@ export class Agents {
 
   /** Each CLI's own settings here (Settings › Agents' model menu: core/settings.js choicesFrom). */
   async ownDefaults() {
-    const [claude, codex] = await Promise.all([this.defaults("claude", null), this.defaults("codex", null)]);
-    return { claude, codex };
+    const [claude, codex, omp] = await Promise.all([this.defaults("claude", null), this.defaults("codex", null), this.defaults("omp", null)]);
+    return { claude, codex, omp };
   }
 
   /** What an unset role runs, in the window's words ("Opus 5.5 · 1M · High"): each CLI's own defaults here. */
   async defaultLines(): Promise<Record<string, string>> {
     const out: Record<string, string> = {};
-    for (const k of ["claude", "codex"]) {
+    for (const k of KINDS) {
       const d: any = await this.defaults(k, null).catch(() => null);
+      // omp has no default model of its own to read: the first of its catalog is what it would start on
+      if (d && k === "omp") { const m = d.models?.[0]; if (m) out[k] = line({ agent: k, model: m.id, label: m.label, effort: m.defaultEffort ?? null, fast: false }).split(" · ").slice(1).join(" · "); continue; }
       if (d) out[k] = line({ agent: k, model: d.model, effort: d.effort ?? d.per?.[String(d.model ?? "").replace(/\[1m\]$/, "")] ?? null, fast: d.fast }).split(" · ").slice(1).join(" · ");
     }
     return out;
@@ -107,13 +148,13 @@ export class Agents {
 
   /** What each CLI offers on a machine (null: here), as the restart sheet lists them. */
   async choices(machine: string | null) {
-    const [claude, codex] = await Promise.all([this.defaults("claude", machine), this.defaults("codex", machine)]);
-    const dflt: any = { claude, codex };
-    return ["claude", "codex"].map((k) => {
+    const [claude, codex, omp] = await Promise.all([this.defaults("claude", machine), this.defaults("codex", machine), this.defaults("omp", machine)]);
+    const dflt: any = { claude, codex, omp };
+    return KINDS.map((k) => {
       const m = menuFor(k, dflt[k], null);
-      // its permission modes, and the one a new agent gets unless picked (the CLI's own: Claude Code's settings mode)
+      // its permission modes, and the one a new agent gets unless picked (core/agents.js: Claude's mapped across for omp)
       return { kind: k, name: NAMES[k], models: m.models.map((x: any) => ({ id: x.id, label: x.name, efforts: x.efforts, ...(x.defaultEffort ? { defaultEffort: x.defaultEffort } : {}) })),
-        speeds: speedsOf(m.models), perms: m.perms ?? [], permDefault: k === "claude" ? dflt.claude?.mode ?? "manual" : "auto" };
+        speeds: speedsOf(m.models), perms: m.perms ?? [], permDefault: permOf(k, claude) };
     });
   }
 
@@ -122,11 +163,11 @@ export class Agents {
     const t: any = this.hub.terminals.get(addr);
     if (!t) throw new Error("That agent isn't here any more.");
     const machine = addr.includes("/") ? addr.split("/")[0] : null;
-    const kind = kindOf(t) ?? "claude";
-    const [claude, codex] = await Promise.all([this.defaults("claude", machine), this.defaults("codex", machine)]);
-    const dflt: any = { claude, codex };
+    const kind = kindOfTerm(t) ?? "claude";
+    const [claude, codex, omp] = await Promise.all([this.defaults("claude", machine), this.defaults("codex", machine), this.defaults("omp", machine)]);
+    const dflt: any = { claude, codex, omp };
     const c = current(kind, t.foreground?.argv ?? t.argv ?? [], reader?.conv?.meta ?? {}, dflt[kind]);
-    const clis = ["claude", "codex"].map((k) => {
+    const clis = KINDS.map((k) => {
       const m = menuFor(k, dflt[k], k === kind ? c.model : null);
       return { kind: k, name: NAMES[k], models: m.models.map((x: any) => ({ id: x.id, label: x.name, efforts: x.efforts, ...(x.defaultEffort ? { defaultEffort: x.defaultEffort } : {}) })),
         speeds: speedsOf(m.models) };
@@ -141,7 +182,7 @@ export class Agents {
     const t: any = this.hub.terminals.get(addr);
     if (!t || t.state !== "live") throw new Error("That agent isn't running.");
     const machine = addr.includes("/") ? addr.split("/")[0] : null;
-    const kind = kindOf(t) ?? reader?.kind ?? "claude";
+    const kind = kindOfTerm(t) ?? reader?.kind ?? "claude";
     const dflt = await this.defaults(kind, machine);
     let meta = reader?.conv?.meta ?? {};
     if (t.created_ms && meta.at && meta.at < t.created_ms) meta = { used: meta.used, window: meta.window };
@@ -184,7 +225,7 @@ export class Agents {
   async restart(addr: string, reader: any, pick: { kind: string; model?: string; effort?: string; speed?: string; perm?: string }) {
     const t: any = this.hub.terminals.get(addr);
     if (!t || t.state !== "live") throw new Error("That agent isn't running.");
-    const kind = kindOf(t) ?? "claude";
+    const kind = kindOfTerm(t) ?? "claude";
     const old = { agent: kind, argv: t.foreground?.argv ?? t.argv ?? [], session: sessionOf(kind, reader?.path ?? null) };
     const built = argvFor({ agent: pick.kind, model: pick.model, effort: pick.effort, fast: speedOf(pick.speed), perm: pick.perm ?? current(kind, old.argv, {}, {}).perm }, old);
     const pane = t.labels?.["herdr.chat"] ?? "";

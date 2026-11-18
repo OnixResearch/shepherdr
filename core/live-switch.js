@@ -7,6 +7,9 @@
 //   and /ultrafast toggle (the active one again: back to Standard) and save service_tier in ~/.codex/config.toml, put
 //   back the same way.
 // Another CLI or another permission mode still needs a restart (liveOK says which).
+// onix: omp changes by restart, never by keys typed into it
+// omp has no in-place switch here: it takes a model, a thinking level and its approvals on its command line, so a
+// change is the restart with the new argv (never keys typed into it).
 // `io` is where it runs: { send(text), keys(...names), screen(), readFile(rel), writeFile(rel, text), sleep(ms) }, rel
 // under the agent's machine's home.
 
@@ -17,9 +20,10 @@ const CODEX_KEYS = ["model", "model_reasoning_effort", "service_tier"];
 const LEVEL = { minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra", none: "None" };
 
 /** Whether the change from what runs (`from`: { agent, model, effort, fast, perm }) to `to` can happen in place:
- *  the same CLI and the same permission mode. */
+ *  the same CLI, the same permission mode, and a CLI whose own commands do it (omp's don't: it restarts). */
 export function liveOK(from, to) {
-  return !!from && !!to && from.agent === to.agent && (!to.perm || !from.perm || to.perm === from.perm);
+  // onix: omp restarts (its model, thinking and approvals are its command line's)
+  return !!from && !!to && from.agent === to.agent && from.agent !== "omp" && (!to.perm || !from.perm || to.perm === from.perm);
 }
 
 /** What changes: { model, effort, fast } (each only when it differs; model/effort '' for the CLI's default; fast
@@ -261,6 +265,9 @@ export async function switchLive(io, kind, from, to, labels = {}) {
   const ch = liveChanges(from, to);
   if (!Object.keys(ch).length) return ch;
   if (kind === "claude") await claude(io, ch);
-  else await codex(io, ch, { ...labels, model: from.model, effort: to.effort });
+  // onix: omp never reaches the typed-keys switch
+  else if (kind === "codex") await codex(io, ch, { ...labels, model: from.model, effort: to.effort });
+  // omp: liveOK says no, so a caller that got here means to restart (argvFor)
+  else throw new Error(`${kind} changes its model by restarting, not by typing into it.`);
   return ch;
 }

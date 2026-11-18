@@ -9,13 +9,39 @@
 
 import { exec, hc, appHome } from "herdr";
 // The rules (names, menus, argv) are core/agents.js, shared with the web app.
-import { DEFAULTS, parseDefaults } from "./core/agents.js";
+// onix: omp's catalog and providers (core/agents.js)
+import { DEFAULTS, parseDefaults, parseOmpModels, ompProviders } from "./core/agents.js";
+import { SH } from "./core/paths.js";
 import { chatLabel } from "./core/spaces.js";
 export * from "./core/agents.js";
 
 export async function defaults(kind, machine) {
+  // onix: omp's defaults are its catalog
+  // omp's own settings hold no model list: its catalog is what it offers (ompModels, below)
+  if (kind === "omp") return { model: null, effort: null, models: await ompModels(machine) };
   const r = await exec("sh", ["-c", DEFAULTS, "defaults", kind], { on: machine }).catch(() => null);
   return parseDefaults(kind, r?.stdout ?? "");
+}
+
+// onix: `omp models --json`, cached 10 minutes, of the allowed providers
+// omp's model catalog (`omp models --json`) on a machine, at most once every 10 minutes (it takes seconds to answer):
+// only the providers Shepherdr's settings allow (onix.omp_providers, Everywhere, so one list for every machine) and
+// only chat models. A provider whose discovery fails for one read keeps the last list rather than showing none.
+const OMP_STALE = 600000;
+const ompSeen = new Map();
+export async function ompModels(machine = null) {
+  const s = await exec("sh", ["-c", `${SH}cat "$SHEP_SETTINGS" 2>/dev/null`], { on: machine }).catch(() => null);
+  let file = {};
+  try { file = JSON.parse(s?.stdout || "{}") ?? {}; } catch {}
+  const providers = ompProviders(file?.everywhere?.onix?.omp_providers);
+  const key = `${machine ?? ""}|${providers.join(",")}`;
+  const was = ompSeen.get(key);
+  if (was && Date.now() - was.at < OMP_STALE) return was.models;
+  const r = await exec("omp", ["models", "--json"], { on: machine }).catch(() => null);
+  const read = r?.code === 0 ? parseOmpModels(r.stdout, providers) : [];
+  const models = read.length ? read : was?.models ?? [];
+  ompSeen.set(key, { at: Date.now(), models });
+  return models;
 }
 
 // Restarts the agent `t` (hc get's record) with `argv`, parked behind chat pane `pane`.

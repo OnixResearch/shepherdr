@@ -2,7 +2,8 @@
 // rules both the window's model menu (lib/agent.js, mods/chat-models) and the web app's use. Reading an agent's own
 // settings and restarting it run where each side runs commands (lib/agent.js, service/agents.ts).
 // Shared core: the source is core/agents.js; bin/sync-shared copies it into the mods in lib/COPIES.
-export const NAMES = { claude: "Claude Code", codex: "Codex" };
+// onix: omp is an agent kind everywhere a kind is named
+export const NAMES = { claude: "Claude Code", codex: "Codex", omp: "omp" };
 
 // Claude Code's current models, as its /model menu offers them. `id` is what --model gets;
 // `match` the names a running agent may report for it.
@@ -14,19 +15,31 @@ const CLAUDE_MODELS = [
   { id: "haiku", name: "Haiku 5.5", match: ["haiku", "claude-haiku-5-5"] },
 ];
 const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+// onix: omp's permission modes, its --approval-mode, and its thinking levels (--thinking)
+// omp's thinking levels (omp --thinking: off, minimal, low, medium, high, xhigh, max, auto), lowest first.
+const OMP_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
 // Permission modes as each CLI has them (Claude: --permission-mode, or
-// --dangerously-skip-permissions for full access; Codex: its sandbox and approvals).
+// --dangerously-skip-permissions for full access; Codex: its sandbox and approvals; omp: --approval-mode).
 const PERMS = {
   claude: [{ id: "manual", label: "Ask" }, { id: "auto", label: "Auto" }, { id: "acceptEdits", label: "Accept edits" },
     { id: "plan", label: "Plan" }, { id: "bypassPermissions", label: "Full access" }],
   codex: [{ id: "read-only", label: "Read only" }, { id: "auto", label: "Auto" }, { id: "full", label: "Full access" }],
+  // omp asks by itself above this: "manual" is its always-ask-cached, "auto" approves writes, "bypassPermissions" is yolo.
+  omp: [{ id: "manual", label: "Ask" }, { id: "auto", label: "Write" }, { id: "bypassPermissions", label: "Full access" }],
 };
+// omp's --approval-mode for each of Shepherdr's: always-ask-cached asks, remembering an approval for the same call;
+// write approves file writes and edits by itself and asks for the rest; yolo approves every tool call. (omp --help)
+const OMP_APPROVAL = { manual: "always-ask-cached", auto: "write", bypassPermissions: "yolo" };
+// and back: what a running omp's --approval-mode says in Shepherdr's words (always-ask asks every time: the same "Ask")
+const OMP_PERM = { "always-ask": "manual", "always-ask-cached": "manual", write: "auto", yolo: "bypassPermissions" };
 // A permission mode carried to the other agent when the agent is switched: its nearest mode there (auto stays auto,
 // full access stays full access, Claude's accept edits is Codex's auto, plan and read only swap), else that agent's
 // default (Claude's ask has no Codex match). Never silently drops auto to ask on a round trip (#758).
 const PERM_ACROSS = {
   claude: { "read-only": "plan", auto: "auto", full: "bypassPermissions" },
   codex: { plan: "read-only", auto: "auto", acceptEdits: "auto", bypassPermissions: "full" },
+  // omp has no read-only mode: a read-only pick is its Ask (omp's reviewer runs on Ask; the brief says read-only)
+  omp: { manual: "manual", acceptEdits: "auto", plan: "manual", "read-only": "manual", full: "bypassPermissions", bypassPermissions: "bypassPermissions" },
 };
 export function permAcross(perm, agent, permDefault) {
   return PERM_ACROSS[agent]?.[perm] ?? (PERMS[agent]?.some((p) => p.id === perm) ? perm : null) ?? permDefault?.[agent] ?? null;
@@ -64,11 +77,15 @@ function overrides(argv) {
 }
 
 // The agent's own settings on its machine: Claude's settings.json, Codex's config.toml and
-// model list. Read once per agent process.
+// model list, omp's (which it keeps for itself: its catalog is `omp models --json`, lib/agent.js).
+// Read once per agent process.
 export const DEFAULTS = `
 if [ "$1" = claude ]; then
   f="$HOME/.claude/settings.json"
   command -v jq >/dev/null && [ -f "$f" ] && jq -r '"model\\t\\(.model // "")", "effort\\t\\(.effortLevel // "")", "fast\\t\\(if .fastMode == true then "on" else "" end)", "per\\t\\(.modelSettings // {} | with_entries(.value |= (.effortLevel // null)) | tojson)", "mode\\t\\(.permissions.defaultMode // "")"' "$f" 2>/dev/null
+# onix: omp keeps its own settings; its models are its catalog (lib/agent.js ompModels)
+elif [ "$1" = omp ]; then
+  true
 else
   f="$HOME/.codex/config.toml"
   for k in model model_reasoning_effort service_tier sandbox_mode approval_policy; do
@@ -102,6 +119,8 @@ export function parseDefaults(kind, stdout) {
       }));
     } catch {}
   }
+  // onix: omp's own settings say no model or level (its catalog is read apart)
+  if (kind === "omp") return { model: out.model || null, effort: out.effort || null };
   return kind === "claude"
     ? { model: out.model || null, effort: out.effort || null, fast: Boolean(out.fast), per: parsePer(out.per), mode: out.mode || null }
     : { model: out.model || null, effort: out.model_reasoning_effort || null, fast: speedOf(out.service_tier),
@@ -126,6 +145,17 @@ export function current(kind, argv, meta, dflt) {
     const perm = argv.includes("--dangerously-skip-permissions") ? "bypassPermissions" : flag(argv, "--permission-mode") ?? dflt.mode ?? "manual";
     return { agent: "claude", model: meta.model ?? alias, alias, effort: meta.effort ?? flag(argv, "--effort") ?? per ?? dflt.effort,
       fast: Boolean(fast), perm: perm === "default" ? "manual" : perm, used: meta.used ?? null, window: meta.window ?? (big ? 1000000 : 200000) };
+  }
+  // onix: what a running omp runs on (its argv, its log, its catalog)
+  if (kind === "omp") {
+    // its log names the provider and the model apart: the picker's id is provider/model (omp's `selector`)
+    const said = meta.model ? (String(meta.model).includes("/") || !meta.provider ? meta.model : `${meta.provider}/${meta.model}`) : null;
+    const model = said ?? flag(argv, "--model") ?? dflt.model ?? null;
+    const m = dflt.models?.find((x) => x.id === model) ?? null;
+    const mode = flag(argv, "--approval-mode");
+    const perm = OMP_PERM[mode] ?? dflt.perm ?? (argv.includes("--auto-approve") ? "bypassPermissions" : "manual");
+    return { agent: "omp", model, label: m?.label ?? null, perm, effort: meta.effort ?? flag(argv, "--thinking") ?? dflt.effort ?? null,
+      fast: false, used: meta.used ?? null, window: meta.window ?? m?.contextWindow ?? null };
   }
   const o = overrides(argv);
   const tier = o.service_tier;
@@ -184,15 +214,51 @@ export function menuFor(agent, dflt, current = null) {
     if (current && !models.some((m) => m.id === current)) models.unshift({ id: current, name: modelName(current), efforts: CLAUDE_EFFORTS, defaultEffort: dflt?.effort ?? null, fast: false });
     return { name: NAMES.claude, perms: PERMS.claude, models };
   }
-  const all = (dflt?.models ?? []).map((m) => ({ id: m.id, name: m.label, efforts: m.efforts?.length ? m.efforts : ["low", "medium", "high", "xhigh"],
+  // onix: omp's menu is its catalog, its own levels and its approval modes
+  // omp's models are its catalog's (parseOmpModels: `omp models --json` of the allowed providers) as Codex's are its own list
+  const fallback = agent === "omp" ? OMP_EFFORTS : ["low", "medium", "high", "xhigh"];
+  const all = (dflt?.models ?? []).map((m) => ({ id: m.id, name: m.label ?? m.name ?? m.id, efforts: m.efforts?.length ? m.efforts : fallback,
     defaultEffort: m.defaultEffort ?? dflt?.effort ?? null, fast: m.fast, ...(m.ultrafast ? { ultrafast: true } : {}) }));
-  if (current && !all.some((m) => m.id === current)) all.unshift({ id: current, name: current, efforts: ["low", "medium", "high", "xhigh"], defaultEffort: dflt?.effort ?? null, fast: false });
-  return { name: NAMES.codex, perms: PERMS.codex, models: all };
+  if (current && !all.some((m) => m.id === current)) all.unshift({ id: current, name: current, efforts: fallback, defaultEffort: dflt?.effort ?? null, fast: false });
+  return { name: NAMES[agent] ?? agent, perms: PERMS[agent], models: all };
 }
 
 // The levels a model typed by id gets: its agent's usual ones.
 export function typedModel(agent, id) {
-  return { id, name: agent === "claude" ? modelName(id) : id, efforts: agent === "claude" ? CLAUDE_EFFORTS : ["low", "medium", "high", "xhigh"], defaultEffort: null, fast: false, typed: true };
+  const efforts = agent === "claude" ? CLAUDE_EFFORTS : agent === "omp" ? OMP_EFFORTS : ["low", "medium", "high", "xhigh"];
+  return { id, name: agent === "claude" ? modelName(id) : id, efforts, defaultEffort: null, fast: false, typed: true };
+}
+
+// onix: omp's model catalog and the onix.omp_providers allowlist
+// ---- omp's model catalog ----------------------------------------------------------------------------------------
+// `omp models --json` on the agent's machine: { models: [{ provider, id, kind, name, thinking, contextWindow, ... }] }
+// (omp 18.22: a `selector` of provider/id is what --model takes). Only the providers Shepherdr's settings allow
+// (onix.omp_providers, Everywhere) and only chat models: an embedding or image row is no agent's model.
+export const OMP_PROVIDERS = ["underclass", "mesh"];
+/** The onix.omp_providers setting as the list of providers: an array or one comma-separated line, lowercased; nothing
+ *  usable: the default (OMP_PROVIDERS). */
+export function ompProviders(value) {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+  const out = [...new Set(raw.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[a-z0-9][a-z0-9_-]*$/.test(x)))];
+  return out.length ? out : [...OMP_PROVIDERS];
+}
+/** Whether an omp model id can be said on its command line: omp reads a trailing ":<level>" in --model as a thinking
+ *  level, and resolves a ":free" suffix as part of the id (its own OpenRouter free tier). */
+export const ompModelOK = (id) => !String(id ?? "").includes(":") || String(id).endsWith(":free");
+/** `omp models --json` as the model menu's models: [{ id: provider/model, label, efforts, defaultEffort, fast,
+ *  contextWindow }] of the allowed providers, in the catalog's order. Unreadable: none. */
+export function parseOmpModels(json, providers = OMP_PROVIDERS) {
+  const allow = new Set(ompProviders(providers));
+  let all;
+  try { all = JSON.parse(String(json ?? "")).models; } catch { return []; }
+  if (!Array.isArray(all)) return [];
+  return all.filter((m) => m && m.kind === "chat" && m.id && allow.has(String(m.provider ?? "").toLowerCase()))
+    .map((m) => {
+      const id = `${m.provider}/${m.id}`;
+      const thinking = Array.isArray(m.thinking) ? m.thinking.filter((t) => OMP_EFFORTS.includes(t)) : [];
+      return { id, label: m.name || id, efforts: thinking.length ? thinking : OMP_EFFORTS, defaultEffort: null, fast: false,
+        contextWindow: Number(m.contextWindow) || null };
+    });
 }
 
 // The person's picks in the model menus (the window's and the web's alike), in PICKS_FILE under the
@@ -294,11 +360,30 @@ const CLAUDE_VALUE = new Set(["--add-dir", "--mcp-config", "--append-system-prom
   "--fallback-model", "--output-format", "--input-format", "--name", "--setting-sources", "--betas", "--debug-file"]);
 const CODEX_VALUE = new Set(["-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
   "-C", "--cd", "--add-dir", "-i", "--image", "--enable", "--disable", "--local-provider", "--oss"]);
+// onix: omp's flags, as a restart states them again and keeps the rest
+// omp's flags: what a restart states again (its model, thinking, approvals, session) and what it must keep (its own
+// provider, profile and folders); every other flag is kept as it is (omp --help).
+const OMP_SET = new Set(["--model", "--thinking", "--approval-mode"]);
+const OMP_BARE = new Set(["--auto-approve"]);
+const OMP_SESSION = new Set(["--resume", "-r", "--restore", "--continue", "-c"]);
+// Flags whose next word is their value (so it isn't taken for a first message, and a restart keeps both).
+const OMP_VALUE = new Set(["--smol", "--slow", "--plan", "--prewalk-into", "--plan-yolo-into", "--provider", "--api-key",
+  "--system-prompt", "--system-prompt-template", "--append-system-prompt", "--profile", "--alias", "--cwd", "--mode",
+  "--config", "--add-dir", "--session-dir", "--models", "--tools", "--skills", "--hook", "-e", "--extension", "--export",
+  "--max-time", "--warn-cost", "--max-cost", "--spinner-interval", "--max-fps", "--motion", "--service-tier"]);
 
-// Where the agent's own word (claude, codex) is in argv: a terminal's argv starts with what launched it (nice,
+// Where the agent's own word (claude, codex, omp) is in argv: a terminal's argv starts with what launched it (nice,
 // sh -c, env, the person's `bash -ic`), whose words are no agent flags (#1001: its -ic was Codex's `-i c`, an image).
 function agentAt(argv) {
-  return argv.findIndex((a, i) => (i === 0 || !String(a).startsWith("-")) && /^(claude|codex)$/.test(String(a).split("/").pop()));
+  return argv.findIndex((a, i) => (i === 0 || !String(a).startsWith("-")) && /^(claude|codex|omp)$/.test(String(a).split("/").pop()));
+}
+
+// onix: omp is one of the agent words a terminal's argv starts
+// The agent a terminal's argv runs (claude, codex or omp), from its own word, else null: the chat reader's kinds don't
+// know every agent (core/chat-reader.js), its argv does.
+export function kindOfArgv(argv) {
+  const at = agentAt(argv ?? []);
+  return at < 0 ? null : String(argv[at]).split("/").pop();
 }
 
 // The old agent's flags worth keeping (permissions, folders, ...), without what is chosen again
@@ -313,6 +398,13 @@ function kept(kind, argv) {
       if (CLAUDE_DROP.has(a)) { if (rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
       if ([...CLAUDE_DROP].some((f) => a.startsWith(f + "="))) continue;
       if (CLAUDE_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
+      if (a.startsWith("-")) out.push(a);
+    // onix: omp's own flags kept, its model/thinking/approvals said again
+    } else if (kind === "omp") {
+      if (OMP_BARE.has(a) || OMP_SESSION.has(a)) { if (OMP_SESSION.has(a) && rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
+      if (OMP_SET.has(a)) { if (rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
+      if ([...OMP_SET, ...OMP_BARE].some((f) => a.startsWith(f + "="))) continue;
+      if (OMP_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
       if (a.startsWith("-")) out.push(a);
     } else {
       if (i === 0 && (a === "resume" || a === "fork")) { if (rest[1] && !rest[1].startsWith("-")) i++; continue; }
@@ -334,7 +426,7 @@ export function freshArgv(kind, argv) {
 }
 
 // argv without its session (a resume, fork, session id or first message): { out, resumed }, or null when no
-// claude/codex word is in it.
+// claude/codex/omp word is in it.
 function stripSession(kind, argv) {
   argv = argv ?? [];
   const at = agentAt(argv);
@@ -349,6 +441,16 @@ function stripSession(kind, argv) {
       if (a === "--continue" || a === "-c") { resumed = true; continue; }
       if (a === "--fork-session") continue;
       if (CLAUDE_VALUE.has(a) || ["--model", "--effort", "--settings", "--permission-mode"].includes(a)) { out.push(a, rest[++i]); continue; }
+    // onix: omp's session (--resume <path>, --restore, -c) comes off for a fresh start
+    } else if (kind === "omp") {
+      // --resume <id|path> and --restore <path> (a crash's turn, continued) both continue a conversation; -c too
+      if (OMP_SESSION.has(a)) { resumed = true; if (a !== "--continue" && a !== "-c" && rest[i + 1] && !rest[i + 1].startsWith("-")) i++; continue; }
+      if (/^--(resume|restore)=/.test(a)) { resumed = true; continue; }
+      if (OMP_BARE.has(a) || [...OMP_BARE].some((f) => a.startsWith(f + "="))) continue;
+      // its model, thinking and approvals stay (a resume runs them again), as Claude Code's do
+      if (OMP_SET.has(a)) { out.push(a, rest[++i]); continue; }
+      if ([...OMP_SET].some((f) => a.startsWith(f + "="))) { out.push(a); continue; }
+      if (OMP_VALUE.has(a)) { out.push(a, rest[++i]); continue; }
     } else {
       if (i === 0 && (a === "resume" || a === "fork")) { resumed = true; continue; }
       if (a === "--last") continue;
@@ -375,6 +477,20 @@ export function argvFor(pick, old) {
     if (same && old.session) return { argv: [...a, "--resume", old.session], resume: true, base: a };
     return { argv: a, resume: false, base: a };
   }
+  // onix: omp starts as `omp` itself: --model provider/id, --thinking, --approval-mode
+  if (pick.agent === "omp") {
+    // omp's own word is argv[0]: never wrapped in env or sh (agent_key is basename(argv[0]))
+    const a = ["omp", ...flags];
+    if (pick.model) {
+      if (!ompModelOK(pick.model)) throw new Error(`omp reads a model id with ":" in it as a thinking level, so ${pick.model} can't be one: pick a provider/model id.`);
+      a.push("--model", pick.model);
+    }
+    if (pick.effort && OMP_EFFORTS.includes(pick.effort)) a.push("--thinking", pick.effort);
+    const approval = OMP_APPROVAL[pick.perm];
+    if (approval) a.push("--approval-mode", approval);
+    if (same && old.session) return { argv: [...a, "--resume", old.session], resume: true, base: a };
+    return { argv: a, resume: false, base: a };
+  }
   // Codex runs its commands outside hc without --no-daemon (as herdr-task and restart.sh add).
   const a = [...flags, "--no-daemon"];
   if (pick.model) a.push("-m", pick.model);
@@ -388,9 +504,19 @@ export function argvFor(pick, old) {
   return { argv: ["codex", ...a], resume: false, base: ["codex", ...a] };
 }
 
-// The conversation's id, from its log's file name.
+// The conversation's id, from its log's file name. omp resumes by its session file's path (--resume <path>), so its
+// session is the path itself (ompSessionId names the id in it).
 export function sessionOf(kind, path) {
-  const m = kind === "claude" ? /([0-9a-f-]{36})\.jsonl$/.exec(path ?? "") : /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(path ?? "");
+  const p = String(path ?? "");
+  // onix: omp resumes by its session file's path
+  if (kind === "omp") return /\.jsonl$/.test(p) ? p : null;
+  const m = kind === "claude" ? /([0-9a-f-]{36})\.jsonl$/.exec(p) : /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(p);
+  return m ? m[1] : null;
+}
+// onix: the id in an omp session file's name
+// An omp session file's id: the uuid after the last `_` in its name (<ISO-ts>_<uuid>.jsonl).
+export function ompSessionId(path) {
+  const m = /_([0-9a-f-]{36})\.jsonl$/.exec(String(path ?? ""));
   return m ? m[1] : null;
 }
 
@@ -398,11 +524,16 @@ export function sessionOf(kind, path) {
 // and speed, resuming `session`.
 export function resumeArgv(kind, argv, session) {
   const out = stripSession(kind, argv)?.out ?? [kind];
-  return kind === "claude" ? [...out, "--resume", session] : [out[0], "resume", ...out.slice(1), session];
+  // onix: omp resumes with --resume <session file path>, as Claude Code does with its id
+  if (kind === "claude" || kind === "omp") return [...out, "--resume", session];
+  return [out[0], "resume", ...out.slice(1), session];
 }
 
-// A copy of the conversation in a new tab beside this one, through the CLI's own fork.
+// A copy of the conversation in a new tab beside this one, through the CLI's own fork. null: that CLI has none (omp),
+// and the fork starts a new conversation with a handoff instead.
 export function forkArgv(kind, argv, session) {
+  // onix: omp has no fork flag: the fork starts a new conversation with a handoff
+  if (kind === "omp") return null;
   argv = argv ?? [];
   // The same model, effort and speed as the original.
   const same = kind === "claude"
@@ -419,7 +550,8 @@ export function forkArgv(kind, argv, session) {
 // #1050: a fork of a task's conversation while the task's agent runs works in the same folder, so two agents would
 // edit one worktree. The task's live agent (a terminal record from `all`, reviewers and helpers aside) when `t` is a
 // task's terminal, else null: the fork then asks first (FORK_LIVE).
-const AGENT_APPS = new Set(["claude-code", "claude", "codex"]);
+// onix: omp runs agents too, so a task's live agent can be one
+const AGENT_APPS = new Set(["claude-code", "claude", "codex", "omp"]);
 export function liveTaskAgent(t, all) {
   const task = t?.labels?.["herdr.task"];
   if (!task) return null;

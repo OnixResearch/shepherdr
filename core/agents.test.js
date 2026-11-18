@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { argvFor, current, forkArgv, FORK_LIVE, line, liveTaskAgent, menuFor, modelSections, parseDefaults, parsePicks, pickKey, resumeArgv, rowFor, withPin, withRecent, speedFor, speedOf, codexTier, speedName, speedWordOf } from "./agents.js";
+import { argvFor, current, forkArgv, FORK_LIVE, freshArgv, kindOfArgv, line, liveTaskAgent, menuFor, modelSections, ompModelOK, ompProviders, ompSessionId, parseDefaults, parseOmpModels, parsePicks, pickKey, resumeArgv, rowFor, sessionOf, withPin, withRecent, speedFor, speedOf, codexTier, speedName, speedWordOf, OMP_PROVIDERS } from "./agents.js";
 
+const SESS = "/tmp/.omp/agent/sessions/-git-onix/2026-11-18T10-00-00-000Z_11111111-2222-3333-4444-555555555555.jsonl";
 const codex = { models: Array.from({ length: 250 }, (_, i) => ({ id: `gpt-${i}`, label: `GPT ${i}`, efforts: ["low", "high"] })) };
 const menus = { claude: menuFor("claude", {}), codex: menuFor("codex", codex) };
 
@@ -164,4 +165,98 @@ test("a model without Ultrafast falls back to Fast, one without Fast to standard
   expect([codexTier("ultrafast"), codexTier(true), codexTier(false)]).toEqual(["ultrafast", "fast", "default"]);
   expect([speedName("ultrafast"), speedName(true), speedName(false)]).toEqual(["Ultrafast", "Fast", null]);
   expect([speedWordOf("ultrafast"), speedWordOf(true), speedWordOf(false)]).toEqual(["ultrafast", "fast", "normal"]);
+});
+
+// ---- omp: its own catalog, its argv, its session file (an OnixResearch fork's agent kind) ---------------------------
+
+// `omp models --json`, as omp 18.22 answers it: its chat models of its providers, an embedding row, and a row without an id
+const OMP_CATALOG = JSON.stringify({ models: [
+  { provider: "underclass", kind: "chat", id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash", thinking: ["low", "high"], contextWindow: 200000 },
+  { provider: "mesh", kind: "chat", id: "gpt-5.4", name: "GPT-5.4", thinking: ["low", "medium"], contextWindow: 1000000 },
+  { provider: "anthropic", kind: "chat", id: "claude-opus-5-5", name: "Opus 5.5" },
+  { provider: "underclass", kind: "embedding", id: "embed-1", name: "Embed" },
+  { provider: "mesh", kind: "chat", name: "no id at all" },
+] });
+
+test("omp's catalog is its chat models of the providers the setting allows, each id provider/id", () => {
+  const models = parseOmpModels(OMP_CATALOG);
+  expect(models.map((m) => m.id)).toEqual(["underclass/deepseek-v4.1-flash", "mesh/gpt-5.4"]);
+  expect(models[0]).toMatchObject({ label: "DeepSeek V4.1 Flash", efforts: ["low", "high"], contextWindow: 200000 });
+  // one provider picked: only its models; a provider it doesn't have: none
+  expect(parseOmpModels(OMP_CATALOG, ["mesh"]).map((m) => m.id)).toEqual(["mesh/gpt-5.4"]);
+  expect(parseOmpModels(OMP_CATALOG, "underclass, nope").map((m) => m.id)).toEqual(["underclass/deepseek-v4.1-flash"]);
+  expect(parseOmpModels("not json")).toEqual([]);
+  // the setting as it is kept: an array or one comma-separated line; nothing usable: the default
+  expect(ompProviders("mesh, underclass")).toEqual(["mesh", "underclass"]);
+  expect(ompProviders(["Mesh"])).toEqual(["mesh"]);
+  expect([ompProviders([]), ompProviders(""), ompProviders(null)]).toEqual([OMP_PROVIDERS, OMP_PROVIDERS, OMP_PROVIDERS]);
+});
+
+test("omp's menu offers its catalog's models, their own thinking levels and its approval modes", () => {
+  const menu = menuFor("omp", { models: parseOmpModels(OMP_CATALOG) });
+  expect(menu.name).toBe("omp");
+  expect(menu.models.map((m) => m.id)).toEqual(["underclass/deepseek-v4.1-flash", "mesh/gpt-5.4"]);
+  expect(menu.models[0].efforts).toEqual(["low", "high"]);
+  expect(menu.perms.map((p) => [p.id, p.label])).toEqual([["manual", "Ask"], ["auto", "Write"], ["bypassPermissions", "Full access"]]);
+  // the model it runs (a typed id) stays on offer, with omp's own levels
+  expect(menuFor("omp", { models: [] }, "underclass/typed-id").models[0])
+    .toMatchObject({ id: "underclass/typed-id", efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"] });
+});
+
+test("omp starts as omp itself: --model provider/id, --thinking, --approval-mode", () => {
+  const pick = { agent: "omp", model: "underclass/deepseek-v4.1-flash", effort: "high", perm: "auto" };
+  const built = argvFor(pick, { agent: null, argv: [] });
+  expect(built.argv).toEqual(["omp", "--model", "underclass/deepseek-v4.1-flash", "--thinking", "high", "--approval-mode", "write"]);
+  expect([built.resume, built.base]).toEqual([false, built.argv]);
+  // Shepherdr's words as its own modes: ask is always-ask-cached, full access is yolo
+  expect(argvFor({ ...pick, perm: "manual" }, { agent: null, argv: [] }).argv.slice(-2)).toEqual(["--approval-mode", "always-ask-cached"]);
+  expect(argvFor({ ...pick, perm: "bypassPermissions" }, { agent: null, argv: [] }).argv.slice(-2)).toEqual(["--approval-mode", "yolo"]);
+  // nothing said: no flag (omp's own defaults stand)
+  expect(argvFor({ agent: "omp", model: "mesh/gpt-5.4" }, { agent: null, argv: [] }).argv).toEqual(["omp", "--model", "mesh/gpt-5.4"]);
+  // a ":" in a model id is a thinking level to omp: refused, but a pinned openrouter ":free" id is its own
+  expect(() => argvFor({ agent: "omp", model: "openrouter/llama:high" }, { agent: null, argv: [] })).toThrow(/thinking level/);
+  expect([ompModelOK("openrouter/llama:free"), ompModelOK("mesh/gpt-5.4")]).toEqual([true, true]);
+  expect(argvFor({ agent: "omp", model: "openrouter/llama:free" }, { agent: null, argv: [] }).argv).toContain("openrouter/llama:free");
+});
+
+test("switching to omp from another CLI keeps none of that CLI's flags, and omp's own flags survive a restart", () => {
+  // a launcher's words before the agent (nice, sh -c, the person's bash -ic) are never omp's flags
+  const old = { agent: "claude", argv: ["sh", "-c", "exec nice -n 10 \"$@\"", "herdr-low", "claude", "--add-dir", "/x", "--model", "opus"] };
+  expect(argvFor({ agent: "omp", model: "mesh/gpt-5.4", perm: "manual" }, old).argv)
+    .toEqual(["omp", "--model", "mesh/gpt-5.4", "--approval-mode", "always-ask-cached"]);
+  // omp's own flags kept: its provider, folders and level defaults
+  const argv = ["omp", "--profile", "work", "--add-dir", "/repo", "--model", "mesh/gpt-5.4", "--thinking", "low", "--approval-mode", "write", "do the thing"];
+  const built = argvFor({ agent: "omp", model: "mesh/gpt-5.4", effort: "high", perm: "manual" }, { agent: "omp", argv, session: SESS });
+  expect(built.argv).toEqual(["omp", "--profile", "work", "--add-dir", "/repo", "--model", "mesh/gpt-5.4", "--thinking", "high", "--approval-mode", "always-ask-cached", "--resume", SESS]);
+  expect(built.resume).toBe(true);
+});
+
+test("omp resumes its session file's path; it has no fork (the fork starts a new conversation with a handoff)", () => {
+  expect(sessionOf("omp", SESS)).toBe(SESS);
+  expect(ompSessionId(SESS)).toBe("11111111-2222-3333-4444-555555555555");
+  expect(sessionOf("omp", "/x/some-log.txt")).toBe(null);
+  const argv = ["omp", "--model", "mesh/gpt-5.4", "--thinking", "low", "--approval-mode", "write", "--resume", SESS];
+  expect(resumeArgv("omp", argv, SESS))
+    .toEqual(["omp", "--model", "mesh/gpt-5.4", "--thinking", "low", "--approval-mode", "write", "--resume", SESS]);
+  // the same, once that session is gone: its model, thinking and approvals, no resume
+  expect(freshArgv("omp", argv)).toEqual(["omp", "--model", "mesh/gpt-5.4", "--thinking", "low", "--approval-mode", "write"]);
+  expect(freshArgv("omp", ["omp", "--model", "mesh/gpt-5.4"])).toBe(null);
+  expect(forkArgv("omp", argv, SESS)).toBe(null);
+  // its word in a launcher's line is the agent's
+  expect(kindOfArgv(["sh", "-c", "exec \"$@\"", "herdr-clean", "omp", "--model", "mesh/gpt-5.4"])).toBe("omp");
+  expect(kindOfArgv(["bash", "-ic", "claude go"])).toBe(null);
+});
+
+test("what a running omp runs on: its argv and its log, with its catalog's label and context window", () => {
+  const dflt = { models: parseOmpModels(OMP_CATALOG) };
+  const c = current("omp", ["omp", "--model", "mesh/gpt-5.4", "--thinking", "medium", "--approval-mode", "yolo"], {}, dflt);
+  expect(c).toMatchObject({ agent: "omp", model: "mesh/gpt-5.4", label: "GPT-5.4", effort: "medium", perm: "bypassPermissions", fast: false, window: 1000000 });
+  expect(line(c)).toBe("omp · GPT-5.4 · Medium");
+  expect(rowFor("omp", c)).toBe("mesh/gpt-5.4");
+  // its log names the provider apart from the model (its own message records)
+  expect(current("omp", ["omp"], { model: "gpt-5.4", provider: "mesh", used: 250000 }, dflt))
+    .toMatchObject({ model: "mesh/gpt-5.4", used: 250000, window: 1000000 });
+  // its own settings say nothing to read; an --auto-approve says full access
+  expect(parseDefaults("omp", "")).toMatchObject({ model: null, effort: null });
+  expect(current("omp", ["omp", "--auto-approve"], {}, {}).perm).toBe("bypassPermissions");
 });

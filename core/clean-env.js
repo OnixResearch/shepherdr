@@ -9,6 +9,11 @@
 // mods/coordinator/restart.sh; test/test_repo.py keeps them equal.
 export const CLEAN_ENV = `for v in $(env | sed -nE 's/^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_[A-Za-z0-9_]+)=.*/\\1/p' | grep -vE '^CLAUDE_CODE_(USE|SKIP|DISABLE|ENABLE|MAX|OAUTH|CLIENT|API)_'); do unset "$v"; done;`;
 
+// onix: omp's markers, after CLEAN_ENV (herdr-task launch.py AGENT_ENV is the same line; CLEAN_ENV itself stays exactly
+// as herdr-task has it). Started from inside another omp session, an omp would attach to that session's file
+// (PI_SESSION_FILE, PI_SESSION_ID), and OMPCODE=1 silences omp's herdr status extension (the task reads "working" forever).
+export const AGENT_ENV = `unset PI_SESSION_FILE PI_SESSION_ID OMPCODE;`;
+
 // Where agent CLIs install, after the holder's own PATH (which keeps its order): a holder started over ssh, as on a
 // linked Mac, has only /usr/bin:/bin:/usr/sbin:/sbin, and claude's native installer, hc and herdr-task live in
 // ~/.local/bin, Homebrew's in /opt/homebrew/bin or /usr/local/bin (GitHub #839: "exec: claude: not found").
@@ -17,4 +22,4 @@ export const AGENT_PATH = `PATH="\${PATH:+$PATH:}$HOME/.local/bin:/opt/homebrew/
 /** A template's `command:` (run by hc under sh -c) that clears those first, finds the agent where it installs, then
  *  execs the command (so the terminal's program is the agent, never sh: on dash the shell would otherwise stay). An
  *  `exec` it had is kept once. */
-export const cleanCommand = (cmd) => `${CLEAN_ENV} ${AGENT_PATH} exec ${String(cmd).trim().replace(/^exec\s+/, "")}`;
+export const cleanCommand = (cmd) => `${CLEAN_ENV} ${AGENT_ENV} ${AGENT_PATH} exec ${String(cmd).trim().replace(/^exec\s+/, "")}`;

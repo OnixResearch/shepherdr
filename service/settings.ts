@@ -14,7 +14,8 @@ import * as APc from "../core/autopilot.js";
 import type { SettingRow, SettingSection } from "../web/shared/types.ts";
 
 const { TASK_ROWS, DEFAULTS, wordFor, valueFor, ROLES: CORE_ROLES, NOTES: CORE_NOTES, ABOUT, BACKUP, REACTIONS, SUGGESTIONS, FEEDBACK, feedbackRepo, upgradeReactions, BASE, BRANCH, branchPattern, MACHINES, OLD_NAMES, SECTIONS,
-  WEB, modelLabel, roleSel, otherCli, otherCliWords, backupProblem, homeAbout, webState, fromWord, LOADING_AGENTS, RESET, machineLabel } = C as any;
+  WEB, modelLabel, roleSel, otherCli, otherCliWords, backupProblem, homeAbout, webState, fromWord, LOADING_AGENTS, RESET, machineLabel,
+  OMP_MODELS, ompProvidersOf } = C as any;   // onix: omp's providers row
 const AP = APc as any;
 /** Autopilot as Everywhere has it now (herdr-task's view: what Settings keeps, else what it kept before, else the
  *  defaults): its schedule's words, events, heartbeat words and what wakes it in plain words */
@@ -229,6 +230,10 @@ export class Settings {
       const repo = this.pick(null, "agents", "feedback_repo");
       rows.push({ label: FEEDBACK.repoTitle, key: "agents.feedback_repo", value: String(repo.value ?? ""), text: true, hint: FEEDBACK.repoAbout,
         placeholder: FEEDBACK.repo } as SettingRow);
+      // onix: the Everywhere row for onix.omp_providers
+      // omp's models come from these providers only (onix.omp_providers): Everywhere's, like the feedback repo
+      rows.push({ label: OMP_MODELS.title, key: "onix.omp_providers", value: ompProvidersOf(this.file).join(", "), text: true,
+        hint: OMP_MODELS.about, placeholder: OMP_MODELS.placeholder } as SettingRow);
     }
     return { name: title("agents"), level: scope ?? "all", rows };
   }
@@ -445,9 +450,17 @@ export class Settings {
       if (word !== null) {
         try { v = JSON.parse(word); } catch { throw new Error("Not an agent."); }
         const ok = (x: unknown) => x == null || (typeof x === "string" && /^[\w.\[\]-]{1,60}$/.test(x));
-        if (!["claude", "codex"].includes(v?.agent) || !ok(v.model) || !ok(v.effort)) throw new Error("Pick Claude Code or Codex.");
+        // onix: omp is a role's agent too, its model provider/id
+        if (!["claude", "codex", "omp"].includes(v?.agent)) throw new Error("Pick Claude Code, Codex or omp.");
+        // omp's model id is its provider's and its id's (core/agents.js parseOmpModels: "provider/id"; a ":" in it is a
+        // thinking level, but a pinned openrouter ":free" id is part of it)
+        if (v.agent === "omp" && v.model != null
+          && !(typeof v.model === "string" && /^[\w.\[\]:/-]{3,120}$/.test(v.model) && v.model.includes("/"))) throw new Error("omp's model is provider/id, as its catalog lists it.");
+        if (v.agent !== "omp" && !ok(v.model)) throw new Error("Not a model.");
+        if (!ok(v.effort)) throw new Error("Not an effort level.");
         // its permission mode, as the window's Permissions pick (one of the CLI's modes; none: the CLI's own default)
-        const PERM: Record<string, string[]> = { claude: ["manual", "auto", "acceptEdits", "plan", "bypassPermissions"], codex: ["read-only", "auto", "full"] };
+        const PERM: Record<string, string[]> = { claude: ["manual", "auto", "acceptEdits", "plan", "bypassPermissions"], codex: ["read-only", "auto", "full"],
+          omp: ["manual", "auto", "bypassPermissions"] };
         if (v.perm != null && !PERM[v.agent].includes(v.perm)) throw new Error("Not one of its permission modes.");
         v = { agent: v.agent, model: v.model ?? null, effort: v.effort ?? null, fast: v.fast === "ultrafast" && v.agent === "codex" ? "ultrafast" : !!v.fast, perm: v.perm ?? null };
       }
@@ -480,6 +493,15 @@ export class Settings {
       if (word !== null && word !== "on" && word !== "off") throw new Error("Not one of its choices.");
       const parent = space ? file.everywhere?.agents?.feedback ?? DEFAULTS.agents.feedback : DEFAULTS.agents.feedback;
       put("agents", "feedback", word === null || (word === "on") === parent ? null : word === "on");
+    // onix: onix.omp_providers, Everywhere only
+    } else if (key === "onix.omp_providers") {
+      // which of omp's providers its models come from (Everywhere: its catalog is read the same on every machine);
+      // empty: back to the default list (core/agents.js OMP_PROVIDERS)
+      // Everywhere's only: a space can't set its own (a machine scope is refused above, as for every non-machine row)
+      if (space) throw new Error("omp's providers are set for every space at once.");
+      const words = String(word ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+      if (words.some((x) => !/^[a-z0-9][a-z0-9_-]*$/.test(x))) throw new Error(OMP_MODELS.bad);
+      put("onix", "omp_providers", words.length ? [...new Set(words)] : null);
     } else if (key === "agents.feedback_repo") {
       // Everywhere's only: owner/name (a github.com link is made one); empty goes back to Shepherdr's own repo
       if (space) throw new Error("The feedback repo is set for every space at once.");

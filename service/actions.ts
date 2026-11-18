@@ -200,11 +200,20 @@ async function knownAgents(hub: Hub, compat: Compat, machine: string | null): Pr
   if (Array.isArray(s?.agents) && s.agents.some((a: any) => Array.isArray(a.run)))
     return [...s.agents.map((a: any) => ({ kind: a.key, name: a.name, installed: true, run: a.run })),
       ...(Array.isArray(s.others) ? s.others.map((a: any) => ({ kind: a.key, name: a.name, installed: false })) : [])];
-  const AGENTS: Record<string, { name: string; run: string[] }> = { claude: { name: "Claude Code", run: ["claude"] }, codex: { name: "Codex", run: ["codex"] } };
+  // onix: omp, as core/agents.js NAMES has it
+  const AGENTS: Record<string, { name: string; run: string[] }> = { claude: { name: "Claude Code", run: ["claude"] }, codex: { name: "Codex", run: ["codex"] },
+    omp: { name: "omp", run: ["omp"] } };
   const r = await exec(hub, ["sh", "-c", 'for c in "$@"; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done', "agents", ...Object.keys(AGENTS)], machine).catch(() => null);
   const have = new Set((r?.stdout ?? "").split("\n").filter(Boolean));
   return Object.entries(AGENTS).map(([kind, a]) => ({ kind, name: a.name, installed: have.has(kind), run: a.run }));
 }
+
+// onix: omp among the kinds the web's model menu takes, its model provider/id (core/agents.js ompModelOK: omp reads a
+// ":" in --model as a thinking level, but resolves a ":free" suffix as part of the id)
+const AGENT_KINDS = ["claude", "codex", "omp"];
+const modelWord = (kind: string, v: unknown): v is string => typeof v === "string" && (kind === "omp"
+  ? /^[\w.\[\]:/-]{3,120}$/.test(v) && v.includes("/") && (!v.includes(":") || v.endsWith(":free"))
+  : /^[\w.\[\]-]{1,60}$/.test(v));
 
 export async function act(hub: Hub, b: any, compat: Compat): Promise<unknown> {
   // 2.1's screen names a chat by its key (compat.ts): its terminal here.
@@ -370,7 +379,7 @@ export async function act(hub: Hub, b: any, compat: Compat): Promise<unknown> {
     if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim().split("\n").pop() || "Autopilot didn't change.");
     return { ok: true };
   }
-  if (b?.type === "model-pin" && compat.agents && ["claude", "codex"].includes(b.agent) && typeof b.model === "string" && /^[\w.\[\]-]{1,60}$/.test(b.model)) {
+  if (b?.type === "model-pin" && compat.agents && AGENT_KINDS.includes(b.agent) && modelWord(b.agent, b.model)) {
     // the model menu's star: pinned to the top of its agent's list (core/agents.js PICKS_FILE, as the window's)
     return { ok: true, picks: (compat.agents as any).pin(b.agent, b.model) };
   }
@@ -380,9 +389,9 @@ export async function act(hub: Hub, b: any, compat: Compat): Promise<unknown> {
     const a = chat(b.chat), reader = compat.reader?.(a);
     if (b.type === "restart-info") return compat.agents.info(a, reader);
     if (b.type === "model-menu") return { ok: true, menu: await (compat.agents as any).menu(a, reader) };
-    if (!["claude", "codex"].includes(b.kind)) throw new Error("Pick Claude Code or Codex.");
+    if (!AGENT_KINDS.includes(b.kind)) throw new Error("Pick Claude Code, Codex or omp.");
     const opt = (v: unknown) => (typeof v === "string" && /^[\w.\[\]-]{1,60}$/.test(v) ? v : undefined);
-    const pick = { kind: b.kind, model: opt(b.model), effort: opt(b.effort), speed: opt(b.speed), perm: opt(b.perm) };
+    const pick = { kind: b.kind, model: modelWord(b.kind, b.model) ? b.model : undefined, effort: opt(b.effort), speed: opt(b.speed), perm: opt(b.perm) };
     // the model menu (live): in place when only the model, level or Fast changes; the restart sheet restarts
     if (b.live === true) return { ok: true, ...(await (compat.agents as any).change(a, reader, pick)) };
     const next = await compat.agents.restart(a, reader, pick);
