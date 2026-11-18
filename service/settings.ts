@@ -15,7 +15,7 @@ import type { SettingRow, SettingSection } from "../web/shared/types.ts";
 
 const { TASK_ROWS, DEFAULTS, wordFor, valueFor, ROLES: CORE_ROLES, NOTES: CORE_NOTES, ABOUT, BACKUP, REACTIONS, SUGGESTIONS, FEEDBACK, feedbackRepo, upgradeReactions, BASE, BRANCH, branchPattern, MACHINES, OLD_NAMES, SECTIONS,
   WEB, modelLabel, roleSel, otherCli, otherCliWords, backupProblem, homeAbout, webState, fromWord, LOADING_AGENTS, RESET, machineLabel,
-  OMP_MODELS, ompProvidersOf } = C as any;   // onix: omp's providers row
+  OMP_MODELS, ompProvidersOf, ompProvidersFrom } = C as any;   // onix: omp's providers row
 const AP = APc as any;
 /** Autopilot as Everywhere has it now (herdr-task's view: what Settings keeps, else what it kept before, else the
  *  defaults): its schedule's words, events, heartbeat words and what wakes it in plain words */
@@ -499,9 +499,9 @@ export class Settings {
       // empty: back to the default list (core/agents.js OMP_PROVIDERS)
       // Everywhere's only: a space can't set its own (a machine scope is refused above, as for every non-machine row)
       if (space) throw new Error("omp's providers are set for every space at once.");
-      const words = String(word ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
-      if (words.some((x) => !/^[a-z0-9][a-z0-9_-]*$/.test(x))) throw new Error(OMP_MODELS.bad);
-      put("onix", "omp_providers", words.length ? [...new Set(words)] : null);
+      const list: string[] | null = ompProvidersFrom(word);
+      if (list === null) throw new Error(OMP_MODELS.bad);
+      put("onix", "omp_providers", list.length ? list : null);
     } else if (key === "agents.feedback_repo") {
       // Everywhere's only: owner/name (a github.com link is made one); empty goes back to Shepherdr's own repo
       if (space) throw new Error("The feedback repo is set for every space at once.");

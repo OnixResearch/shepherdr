@@ -28,6 +28,8 @@ import { secretsInit, secretsSection } from "./secrets-section.js";
 import { baseInit, baseRow } from "./base-branch.js";
 import { branchInit, branchRow } from "./branch-names.js";
 import { feedbackInit, feedbackRow, feedbackRepoRow } from "./feedback-repo.js";
+// onix: Agents > omp providers (which of omp's providers its models come from)
+import { ompProvidersInit, ompProvidersRow } from "./omp-providers.js";
 import { autopilotInit, autopilotSection, autopilotFlush } from "./autopilot-section.js";
 import { spaceName } from "./core/spaces.js";
 import { NOTIFY, NOTIFY_DEFAULT, notifyMachine, notifyMachineOwn, notifyOf, notifyOwn, notifyEverywhere,
@@ -98,6 +100,8 @@ export default class ShepherdrSettings extends View {
     // Tasks > Branch names, Everywhere's or a space's (branch-names.js).
     this.bn = branchInit(this);
     this.fr = feedbackInit(this);
+    // Agents > omp providers, Everywhere's (omp-providers.js)
+    this.op = ompProvidersInit(this);
     // Autopilot: one setting for every space, kept by herdr-task (autopilot-section.js).
     this.ap = autopilotInit(this, cx);
     // The add-ons Window's switches offer (lib/addons.json, layout.js).
@@ -488,7 +492,9 @@ export default class ShepherdrSettings extends View {
       .child(this.backupRow(t))
       .child(this.reactionsRow(t))
       .child(feedbackRow(this, t))
-      .children([feedbackRepoRow(this, t)].filter(Boolean));
+      .children([feedbackRepoRow(this, t)].filter(Boolean))
+      // onix: Everywhere's omp providers, the same box pattern as the feedback repo above
+      .children([ompProvidersRow(this, t)].filter(Boolean));
   }
 
   // A role: its model button and, on Everywhere, "Edit instructions" (the same for every space).

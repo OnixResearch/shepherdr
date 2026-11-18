@@ -177,6 +177,14 @@ export const OMP_MODELS = {
 };
 /** The setting as the agents read it: a settings file's Everywhere value, cleaned (agents.js ompProviders). */
 export const ompProvidersOf = (file) => ompProviders(file?.everywhere?.onix?.omp_providers);
+/** A providers box's words as the setting keeps them: a comma list of provider names, lowercased and deduped, [] when it
+ *  names none (the default applies), or null when a word isn't a provider name (OMP_MODELS.bad says so). The window's
+ *  box and the web's row both check with this one rule. */
+export function ompProvidersFrom(text) {
+  const words = String(text ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  if (words.some((x) => !/^[a-z0-9][a-z0-9_-]*$/.test(x))) return null;
+  return [...new Set(words)];
+}
 // What a role's model button starts from: its own choice, else for the Reviewer the other CLI, else the defaults.
 export function roleSel(role, own, choices, worker) {
   if (own) return { sel: { ...own }, unset: false };

@@ -55,6 +55,12 @@ test("omp's providers setting: Everywhere's list, the default when it says nothi
   expect(S.ompProvidersOf({ everywhere: { onix: { omp_providers: ["mesh"] } } })).toEqual(["mesh"]);
   expect(S.ompProvidersOf({ everywhere: {} })).toEqual(["underclass", "mesh"]);
   expect(S.ompProvidersOf({})).toEqual(["underclass", "mesh"]);
+  // the box's words, as the window's row and the web's row check them with one rule
+  expect(S.ompProvidersFrom(" mesh, underclass ")).toEqual(["mesh", "underclass"]);
+  expect(S.ompProvidersFrom("mesh, mesh")).toEqual(["mesh"]);
+  expect([S.ompProvidersFrom(""), S.ompProvidersFrom(null)]).toEqual([[], []]);
+  expect(S.ompProvidersFrom("mesh; rm -rf /")).toBe(null);
+  expect(S.ompProvidersFrom("mesh,-bad")).toBe(null);
 });
 
 test("the model button says what the window's does", () => {
