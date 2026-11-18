@@ -298,6 +298,12 @@ function TerminalView({ chatKey, panel }: { chatKey: string; panel?: boolean }) 
   )
 }
 
+/** onix: a tab whose agent has a chat: Claude Code's, Codex's or omp's own session log. The tab's cli, else the agent
+ *  Herdr names (omp is one before the chat reader knows its kind). */
+const CHAT_AGENTS = ['claude', 'codex', 'omp']
+const chatAgent = (t: { cli?: string; agent?: string } | undefined) =>
+  CHAT_AGENTS.includes(t?.cli ?? '') || CHAT_AGENTS.includes(t?.agent ?? '')
+
 /** A phone has no room for 3.0's tab bar: its ⋯ lists the space's tabs (the Assistant's first, the shown one ticked),
  *  then Chat or Terminal, which a wider header shows as its own switch. Wider, the tab bar has the tabs. */
 function PlaceTerm({ place }: { place: Place }) {
@@ -321,9 +327,9 @@ function PlaceTerm({ place }: { place: Place }) {
             )
           })
         : null}
-      {/* the shown tab's Chat | Terminal, as the same two choices (another tab's: Claude Code's and Codex's) */}
+      {/* the shown tab's Chat | Terminal, as the same two choices (another tab's: Claude Code's, Codex's and omp's) */}
       {other ? (
-        ['claude', 'codex'].includes(place.tabs?.find((t) => t.term === ui.term)?.cli ?? '') ? (
+        chatAgent(place.tabs?.find((t) => t.term === ui.term)) ? (
           <MenuSetting name="Show" icon={<TermIcon className={ic} />} choices={(['chat', 'terminal'] as const).map((v) => ({
             label: v === 'chat' ? 'Chat' : 'Terminal', on: (ui.tabView?.[ui.term!] ?? 'terminal') === v,
             onClick: () => setUI((u) => ({ tabView: { ...u.tabView, [u.term!]: v }, menu: false })),
@@ -348,9 +354,9 @@ function ChatOrTerminal({ place }: { place: Place }) {
   const view = useUI((u) => (shown ? u.tabView?.[shown] : undefined))
   if (device === 'phone') return null
   if (shown) {
-    // another tab: Claude Code's and Codex's have it too (3.0's pane header: a chat reads their own session logs)
+    // another tab: Claude Code's, Codex's and omp's have it too (3.0's pane header: a chat reads their own session logs)
     const tab = place.tabs?.find((t) => t.term === shown)
-    if (!tab || !['claude', 'codex'].includes(tab.cli ?? '')) return null
+    if (!tab || !chatAgent(tab)) return null
     const chat = view === 'chat'
     const pick = (v: 'chat' | 'terminal') => setUI((ui) => ({ tabView: { ...ui.tabView, [shown]: v }, menu: false, pick: null }))
     return (

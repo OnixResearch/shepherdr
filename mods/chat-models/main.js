@@ -26,7 +26,8 @@ import { theme, props, setShared, closeOverlay, home, readTextFile, writeTextFil
 import { modelSections, parsePicks, pickKey, withPin, withRecent, PICKS_FILE, permAcross, speedFor, speedName } from "./core/agents.js";
 import { dirs } from "./dirs.js";
 
-const AGENTS = ["claude", "codex"];
+// onix: omp's models are in the menu too
+const AGENTS = ["claude", "codex", "omp"];
 const LEVEL = { minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra", none: "None" };
 // Sizes, as the chat counts them for the overlay's height (mods/chat openPicker): the model list
 // scrolls past LIST; NOTE is a quiet line (an offline machine's; a new conversation's, two lines).

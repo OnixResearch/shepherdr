@@ -142,6 +142,9 @@ export async function settleBox(io, addr, body, opts = SETTLE) {
 // box is watched until it is clear (settleBox). again: its last send stayed in the box; if the box
 // holds exactly it still, it gets Enter, never typed twice. -> hc's result; stuck: still in the box.
 export async function sendTyped(io, addr, kind, body, opts = SETTLE, again = false) {
+  // onix: omp takes hc send as it is (no box read, no keys pressed)
+  // Claude Code's box alone needs watching: omp's and Codex's take the message with hc send as it is (omp draws no box
+  // this can read, and none of its keys are pressed here)
   if (kind !== "claude") return io.hc(["send", addr, body]);
   if (again) {
     const box = await boxOf(io, addr);

@@ -41,6 +41,8 @@ export const LEVELS = Object.keys(RANK)
 
 const CLAUDE_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 const PI_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+/** onix: omp's own --thinking levels (omp --help), lowest first; `auto` is omp's to pick the level itself */
+const OMP_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto']
 const claude = (id: string, label: string, effort: string): Model => ({ id, label, efforts: CLAUDE_LEVELS, effort })
 const codex = (id: string, label: string, effort: string, ultra = true): Model => ({ id, label, efforts: [...CLAUDE_LEVELS, ...(ultra ? ['ultra'] : [])], effort })
 
@@ -57,6 +59,8 @@ export const TABLE: Record<string, CliModels> = {
   },
   // pi reaches many providers' models: only pi itself can list them
   pi: { models: [], efforts: PI_LEVELS },
+  // omp's are its catalog's (`omp models --json`, parseOmp), of the providers Shepherdr's settings allow
+  omp: { models: [], efforts: OMP_LEVELS },
 }
 
 /** Claude Code's families as its /model menu offers them, newest of each; its aliases (opus, haiku) name these too */
@@ -127,6 +131,29 @@ export function parseCodex(json: string): CliModels | undefined {
   if (!models.length) return undefined
   const efforts = [...new Set(models.flatMap((m) => m.efforts))].sort((a, b) => RANK[a] - RANK[b])
   return { models, others: ok.filter((m) => m.visibility === 'hide').map(model), efforts }
+}
+
+/** onix: `omp models --json`: its chat models of the allowed providers, each id its selector (provider/id), with the thinking
+ *  levels it lists; nothing readable: undefined */
+export function parseOmp(json: string, providers: string[] = ['underclass', 'mesh']): CliModels | undefined {
+  type Raw = { provider?: string; id?: string; selector?: string; kind?: string; name?: string; reasoning?: boolean; thinking?: string[]; contextWindow?: number }
+  const allow = new Set(providers.map((p) => p.trim().toLowerCase()).filter(Boolean))
+  let raw: Raw[]
+  try {
+    raw = JSON.parse(json.slice(json.indexOf('{'))).models
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(raw)) return undefined
+  const ok = raw.filter((m) => m?.id && m.kind === 'chat' && allow.has(String(m.provider ?? '').toLowerCase()))
+  const models = ok.map((m): Model => {
+    const thinking = (m.thinking ?? []).filter((l) => OMP_LEVELS.includes(l))
+    const id = m.selector || `${m.provider}/${m.id ?? ''}`
+    return { id, label: m.name || m.id || id, efforts: thinking.length ? thinking : OMP_LEVELS }
+  })
+  if (!models.length) return undefined
+  const efforts = [...new Set(models.flatMap((m) => m.efforts))]
+  return { models, efforts }
 }
 
 /** `pi --list-models`: a table of provider, model, …, thinking (yes or no); the levels from its --help */

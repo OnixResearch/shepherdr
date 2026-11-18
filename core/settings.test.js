@@ -37,6 +37,26 @@ test("the model menu's headings are the window's (mods/chat-models)", () => {
   for (const w of Object.values(S.MODEL_MENU)) expect(src).toContain(`"${w}"`);
 });
 
+test("omp is offered where its catalog answered, with Claude's default level mapped to its own approvals", () => {
+  const omp = { models: [{ id: "mesh/gpt-5.4", label: "GPT-5.4", efforts: ["low", "high"], fast: false }] };
+  const { menus, permDefault, defaults } = S.choicesFrom({ claude: { model: "opus", per: {} }, codex: {}, omp });
+  expect(Object.keys(menus)).toEqual(["claude", "codex", "omp"]);
+  expect(menus.omp.models.map((m) => m.id)).toEqual(["mesh/gpt-5.4"]);
+  // Claude runs Ask by default (its settings say nothing): omp's is its Ask too; full access stays full access
+  expect([permDefault.omp, permDefault.claude]).toEqual(["manual", "manual"]);
+  expect(S.choicesFrom({ claude: { mode: "bypassPermissions" }, omp }).permDefault.omp).toBe("bypassPermissions");
+  // no catalog: no omp to offer; only omp: it is what an unset role runs
+  expect(S.choicesFrom({ claude: {}, codex: {} }).menus.omp).toBeUndefined();
+  expect(S.choicesFrom({ omp }, { omp: true })).toMatchObject({ defaults: { agent: "omp", model: "mesh/gpt-5.4" } });
+});
+
+test("omp's providers setting: Everywhere's list, the default when it says nothing", () => {
+  expect(S.OMP_MODELS.title).toBe("omp providers");
+  expect(S.ompProvidersOf({ everywhere: { onix: { omp_providers: ["mesh"] } } })).toEqual(["mesh"]);
+  expect(S.ompProvidersOf({ everywhere: {} })).toEqual(["underclass", "mesh"]);
+  expect(S.ompProvidersOf({})).toEqual(["underclass", "mesh"]);
+});
+
 test("the model button says what the window's does", () => {
   const { menus, defaults } = S.choicesFrom({ claude: { model: "opus[1m]", effort: "high", per: {} }, codex: { models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }] } });
   expect(S.modelLabel(menus, defaults)).toBe("Opus 5.5 · 1M · High");

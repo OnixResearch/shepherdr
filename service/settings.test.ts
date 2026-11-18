@@ -169,7 +169,7 @@ test("Agents and Tasks say the window's words: the model button, Other CLI, Must
   s.start();
   s.choices = C.choicesFrom({ claude: { model: "opus[1m]", effort: "high", per: {} }, codex: { models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }] } });
   const agents = s.sections(null).find((x) => x.name === "Agents" && x.level === "all")!;
-  expect(agents.rows.map((r) => r.label)).toEqual(["Assistant", "Workers", "Reviewer", "Backup agent", "Reactions", "Suggested next message", "Feedback offers", "Feedback repo"]);
+  expect(agents.rows.map((r) => r.label)).toEqual(["Assistant", "Workers", "Reviewer", "Backup agent", "Reactions", "Suggested next message", "Feedback offers", "Feedback repo", "omp providers"]);
   expect(agents.rows[0].value).toBe("Opus 5.5 · 1M · High");
   expect(agents.rows[2]).toMatchObject({ value: "Other CLI (Codex)", agent: { unset: true, other: false } });
   const tasks = s.sections(null).find((x) => x.name === "Tasks" && x.level === "all")!;
@@ -243,4 +243,36 @@ test("Feedback offers and its repo", () => {
   expect(() => s.set("agents.feedback_repo", "acme/x", "sp7", sp)).toThrow();
   s.set("agents.feedback_repo", "", "all");
   expect(JSON.parse(readFileSync(file, "utf8")).everywhere?.agents).toBeUndefined();
+});
+
+// omp (an OnixResearch fork's agent kind): its picks are kept as the window's are, and its providers are one Everywhere row
+test("an omp pick is a role's agent like Claude's or Codex's, and its providers are Everywhere's", () => {
+  writeFileSync(file, "{}");
+  const s = new Settings();
+  s.start();
+  const scope = { id: "sp9", name: "api", machine: null, folder: "/api" };
+  s.set("role.worker", JSON.stringify({ agent: "omp", model: "mesh/gpt-5.4", effort: "high", perm: "auto" }), "all");
+  let f = JSON.parse(readFileSync(file, "utf8"));
+  expect(f.everywhere.worker).toEqual({ agent: "omp", model: "mesh/gpt-5.4", effort: "high", fast: false, perm: "auto" });
+  // the panel says what it runs: its model's name from the catalog, its level and permissions
+  s.choices = CORE.choicesFrom({ claude: { model: "opus", per: {} }, codex: {}, omp: { models: [{ id: "mesh/gpt-5.4", label: "GPT-5.4", efforts: ["low", "high"], fast: false }] } });
+  expect(s.sections(null).find((x) => x.name === "Agents" && x.level === "all")!.rows[1].value).toBe("GPT-5.4 · High");
+  // a model id with no provider isn't omp's, and its permission modes are its own three
+  expect(() => s.set("role.worker", JSON.stringify({ agent: "omp", model: "gpt-5.4" }), "all")).toThrow(/provider/);
+  expect(() => s.set("role.worker", JSON.stringify({ agent: "omp", model: "mesh/gpt-5.4", perm: "plan" }), "all")).toThrow(/permission/);
+  expect(() => s.set("role.worker", JSON.stringify({ agent: "pi", model: "mesh/gpt-5.4" }), "all")).toThrow(/Pick Claude Code, Codex or omp/);
+  s.set("role.worker", JSON.stringify({ agent: "omp", model: "openrouter/llama:free", perm: "bypassPermissions" }), "all");
+  expect(JSON.parse(readFileSync(file, "utf8")).everywhere.worker).toMatchObject({ agent: "omp", model: "openrouter/llama:free", perm: "bypassPermissions" });
+  // omp's providers: one Everywhere row, a comma list; empty is the default; a space can't set its own
+  const row = (level = "all") => s.sections(null, [scope]).find((x) => x.name === "Agents" && x.level === level)!.rows.find((r) => r.key === "onix.omp_providers");
+  expect(row()).toMatchObject({ label: "omp providers", text: true, value: "underclass, mesh", hint: CORE.OMP_MODELS.about });
+  s.set("onix.omp_providers", "mesh, underclass", "all");
+  expect(JSON.parse(readFileSync(file, "utf8")).everywhere.onix.omp_providers).toEqual(["mesh", "underclass"]);
+  expect(row()?.value).toBe("mesh, underclass");
+  expect(row("sp9")).toBeUndefined();
+  expect(() => s.set("onix.omp_providers", "mesh", "sp9", scope)).toThrow(/every space/);
+  expect(() => s.set("onix.omp_providers", "mesh; rm -rf", "all")).toThrow(/Name providers/);
+  s.set("onix.omp_providers", "", "all");
+  expect(JSON.parse(readFileSync(file, "utf8")).everywhere.onix).toBeUndefined();
+  expect(row()?.value).toBe("underclass, mesh");
 });

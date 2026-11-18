@@ -13,6 +13,12 @@ test("only another CLI or permission mode needs a restart", () => {
   expect(liveOK(from, { ...from, perm: "plan" })).toBe(false);
 });
 
+test("omp changes its model by restarting: never its own keys typed for it", async () => {
+  const from = { agent: "omp", model: "mesh/gpt-5.4", effort: "low", fast: false, perm: "auto" };
+  expect(liveOK(from, { ...from, model: "underclass/deepseek-v4.1-flash", effort: "high" })).toBe(false);
+  await expect(switchLive({}, "omp", from, { ...from, model: "underclass/deepseek-v4.1-flash" })).rejects.toThrow(/restarting/);
+});
+
 test("a new model says its level again; nothing else that stays", () => {
   const from = { model: "opus", effort: "high", fast: false };
   expect(liveChanges(from, { model: "opus", effort: "medium", fast: false })).toEqual({ effort: "medium" });

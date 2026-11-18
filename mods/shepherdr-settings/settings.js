@@ -27,14 +27,19 @@ const LEVEL = { minimal: "Minimal", low: "Low", medium: "Medium", high: "High", 
 const LAST = () => `${appHome()}/data/coordinator-last.json`;
 
 // What the agents on this machine (or `machine`) offer: { menus, icons, installed, permDefault,
-// defaults } (defaults: the CLI's own, for a first time).
+// defaults } (defaults: the CLI's own, for a first time). omp's models are its catalog (agent.js
+// ompModels), and it is offered where that answered: its own settings say nothing about them.
+// onix: omp sits beside Claude Code and Codex
+const AGENTS = ["claude", "codex", "omp"];
 export async function loadChoices(machine = null) {
-  const [claude, codex, known] = await Promise.all([agent.defaults("claude", machine), agent.defaults("codex", machine),
+  const [claude, codex, omp, known] = await Promise.all([agent.defaults("claude", machine), agent.defaults("codex", machine),
+    agent.defaults("omp", machine),
     knownAgents({ on: machine }).catch(() => [])]);
   const prog = (k) => known.find((a) => a.key === k || (a.run ?? [])[0] === k);
-  const installed = Object.fromEntries(["claude", "codex"].map((k) => [k, prog(k) ? prog(k).installed !== false : k === "claude"]));
-  const icons = Object.fromEntries(["claude", "codex"].map((k) => [k, { icon: prog(k)?.icon ?? null, tint: Boolean(prog(k)?.tint) }]));
-  const { menus, permDefault, defaults } = choicesFrom({ claude, codex }, installed);
+  // onix: omp is installed where its catalog answered
+  const installed = Object.fromEntries(AGENTS.map((k) => [k, k === "omp" ? omp.models.length > 0 : prog(k) ? prog(k).installed !== false : k === "claude"]));
+  const icons = Object.fromEntries(AGENTS.map((k) => [k, { icon: prog(k)?.icon ?? null, tint: Boolean(prog(k)?.tint) }]));
+  const { menus, permDefault, defaults } = choicesFrom({ claude, codex, omp }, installed);
   return { menus, icons, installed, permDefault, defaults };
 }
 

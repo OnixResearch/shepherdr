@@ -130,6 +130,9 @@ export function howAnswered(ask, text, where) {
 // its screen, as a person would (SHEP-91): each question in turn, a number key picks a choice (and goes on to the next;
 // the last one sends them all), and an answer of one's own goes in the notes of "None of the above" (down to it, tab,
 // the words pasted and Enter). Only while the screen shows the questions the card was drawn from.
+// onix: omp has no permission hook and no question picker: no card, no keys sent
+// The Claude cards above are its PermissionRequest hook's, which omp doesn't have (no card is drawn for it, and none of
+// Claude's or Codex's keys is sent to it: its own screen asks, and the person answers it in the terminal).
 
 /** request_user_input's arguments as the card's questions: [{ text, header, choices: [{ label, description? }] }]. */
 export function codexQuestions(args) {

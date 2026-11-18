@@ -1054,8 +1054,10 @@ export default class Chat extends View {
     if (this.lostTried.has(addr)) return false;
     this.lostTried.add(addr);
     if (!t) { try { t = JSON.parse((await hc(["get", addr, "--json"])).stdout || "null"); } catch {} }
-    const kind = cliOf({ agent: (t?.argv ?? []).map((a) => String(a).split("/").pop()).find((a) => /^(claude|codex)$/.test(a)) });
-    const fresh = kind ? agent.freshArgv(kind, t?.argv) : null;
+    // onix: omp too: its own word in its argv is claude, codex or omp (agent.kindOfArgv), whatever screens.js knows
+    const argv = t?.argv ?? t?.foreground?.argv ?? [];
+    const kind = agent.kindOfArgv(argv);
+    const fresh = kind ? agent.freshArgv(kind, argv) : null;
     if (!fresh) return false;
     if (t.state !== "live" && (t.exit_code ?? 1) === 0) return false;
     const screen = (await hc(["read", addr, "--lines", "40"]).catch(() => null))?.stdout ?? "";
@@ -1734,8 +1736,10 @@ export default class Chat extends View {
       let launch = template, oneOff = null, words = "";
       const st = this.choice?.sel ?? props()?.settings;
       const on = machine ? { on: machine } : {};
-      const there = !machine || !st?.agent ? true : (await knownAgents(on).catch(() => []))
-        .some((a) => (a.key === st.agent || (a.run ?? [])[0] === st.agent) && a.installed !== false);
+      // onix: omp is installed where its catalog answered (agent.ompModels): herdr's agent table may not know it
+      const there = !machine || !st?.agent ? true : st.agent === "omp"
+        ? (await agent.ompModels(machine).catch(() => [])).length > 0
+        : (await knownAgents(on).catch(() => [])).some((a) => (a.key === st.agent || (a.run ?? [])[0] === st.agent) && a.installed !== false);
       {
         const q = (a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${String(a).replace(/'/g, "'\\''")}'`);
         const src = (await exec("sh", ["-c", TEMPLATE + 'cat "$dir/$1.md"', "x", template], on).catch(() => null))?.stdout ?? "";
@@ -2328,6 +2332,8 @@ export default class Chat extends View {
   // the prompts with the newest last (Up once per later prompt); Codex's Esc Esc browses the
   // transcript from the last prompt (Left once per later prompt). Then the terminal shows it.
   rewind(row, cx) {
+    // onix: omp has neither /rewind nor Codex's Esc Esc transcript: no other CLI's keys go to it
+    if (this.kind !== "claude" && this.kind !== "codex") { toast({ title: "Can't rewind", body: `${agent.NAMES[this.kind] ?? "This agent"} has no rewind: fork or restart to go back.`, level: "info" }); return; }
     if (this.status() === "working") { toast({ title: "The agent is working", body: "Stop it first, then rewind.", level: "info" }); return; }
     const users = (this.conv?.items ?? []).filter((x) => x.kind === "user" && !x.from && !/^\//.test(x.text ?? ""));
     const i = users.findIndex((u) => u.id === row.of);
@@ -2747,20 +2753,24 @@ export default class Chat extends View {
       try {
         const stale = !this.pickCache || Date.now() - this.pickCache.at > 60000 || this.pickCache.machine !== this.machine;
         if (stale) {
-          const [claude, codex, known] = await Promise.all([agent.defaults("claude", this.machine), agent.defaults("codex", this.machine),
-            knownAgents({ on: this.machine }).catch(() => [])]);
+          // onix: omp's catalog beside the other agents' settings
+          const [claude, codex, omp, known] = await Promise.all([agent.defaults("claude", this.machine), agent.defaults("codex", this.machine),
+            agent.ompModels(this.machine).catch(() => []), knownAgents({ on: this.machine }).catch(() => [])]);
           const prog = (key) => known.find((a) => a.key === key || (a.run ?? [])[0] === key);
-          this.pickCache = { at: Date.now(), machine: this.machine, dflts: { claude, codex },
-            icons: Object.fromEntries(["claude", "codex"].map((k) => [k, { icon: prog(k)?.icon ?? null, tint: Boolean(prog(k)?.tint) }])),
-            installed: Object.fromEntries(["claude", "codex"].map((k) => [k, prog(k) ? prog(k).installed !== false : true])) };
+          this.pickCache = { at: Date.now(), machine: this.machine, dflts: { claude, codex, omp: { models: omp } },
+            icons: Object.fromEntries(["claude", "codex", "omp"].map((k) => [k, { icon: prog(k)?.icon ?? null, tint: Boolean(prog(k)?.tint) }])),
+            installed: Object.fromEntries(["claude", "codex", "omp"].map((k) => [k, prog(k) ? prog(k).installed !== false : true])),
+            // omp counts as installed where its catalog answered (`omp models --json`: nothing is what not installed looks like)
+            have: { omp: omp.length > 0 } };
         }
-        const { dflts, icons, installed } = this.pickCache;
+        const { dflts, icons, installed, have } = this.pickCache;
         if (this.kind) dflts[this.kind] = this.dflt ?? dflts[this.kind];
         // its machine out of reach now: the menu says so once a change is chosen (the restart waits for it)
         const offline = this.machine && !online(this.machine) ? this.machine : null;
         const currentRow = agent.rowFor(c.agent, c);
         // Installed agents only (and always the one running).
-        const menus = Object.fromEntries(["claude", "codex"].filter((k) => k === c.agent || installed[k])
+        // onix: omp among the agents offered
+        const menus = Object.fromEntries(["claude", "codex", "omp"].filter((k) => k === c.agent || (installed[k] && have?.[k] !== false))
           .map((k) => [k, agent.menuFor(k, dflts[k], k === c.agent ? currentRow : null)]));
         // As tall as the menu can get (chat-models' sizes): border and padding, another machine's
         // offline line, agent tabs, search, the list (it scrolls past 8 rows), separator, Reasoning header
@@ -2770,7 +2780,8 @@ export default class Chat extends View {
           at: at ? { x: Math.max(8, at.x - W + 90), y: Math.max(8, at.y - H - 10) } : "pointer",
           props: { pane: this.pickKey(), offline, width: W, height: H, select: name ? findModel(menus, name) : null,
             current: { agent: c.agent, model: currentRow, effort: c.effort ?? null, fast: c.fast, perm: c.perm ?? null },
-            menus, icons, permDefault: { claude: dflts.claude?.mode ?? "manual", codex: "auto" } } });
+            // onix: omp's own default permission mode (Claude's mapped across)
+            menus, icons, permDefault: { claude: dflts.claude?.mode ?? "manual", codex: "auto", omp: agent.permAcross(dflts.claude?.mode ?? "manual", "omp", { omp: "manual" }) } } });
       } finally {
         this.picking = false;
         cx.notify();
@@ -3175,7 +3186,8 @@ export default class Chat extends View {
 
   // Whose ask a card shows: the CLI's short name ("Claude asks").
   cli() {
-    return this.kind === "codex" ? "Codex" : "Claude";
+    // onix: core/agents.js names the CLIs; "Claude Code" is "Claude" here, "Codex" and "omp" as they are
+    return (agent.NAMES[this.kind] ?? "Claude").replace(/ Code$/, "");
   }
 
   // The empty box's words: whom it writes to.

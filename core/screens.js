@@ -119,12 +119,14 @@ export const pressKeys = (at, choice) => [...Array(Math.abs(choice - at)).fill(c
 const FIRST_LOOK = 6000;  // an agent this young may just be slow
 const RETRY = 10000;      // a pressed choice has this long to leave the screen before it's asked again
 export const KEEP = 6;    // closed cards kept per agent (their quiet lines)
-export const CLI = { claude: "Claude Code", codex: "Codex" };
+// onix: omp is a CLI whose start screens the chat reads
+export const CLI = { claude: "Claude Code", codex: "Codex", omp: "omp" };
 
-// Which CLI a terminal runs: { claude | codex } from its report or its program, else null.
+// Which CLI a terminal runs: { claude | codex | omp } from its report or its program, else null.
 export function cliOf(k) {
   const a = String(k?.status?.app ?? k?.agent ?? k?.foreground?.name ?? "");
-  return /^claude/.test(a) ? "claude" : /^codex/.test(a) ? "codex" : null;
+  // onix: omp names itself (Herdr reports app "omp")
+  return /^claude/.test(a) ? "claude" : /^codex/.test(a) ? "codex" : a === "omp" ? "omp" : null;
 }
 
 // Still before its session: live, no status reported, no turn taken. (hc ls's `status` is the report's state word,
