@@ -7,17 +7,22 @@ herdr-task's tick imports it to hold new tasks while its machine is too busy (ho
 Plan limits come only from each CLI's own usage source, each in its own short process that can
 write nothing real (bwrap on Linux, sandbox-exec on a Mac): Claude Code's `/usage` and Codex's
 `account/rateLimits/read`. Never through a running agent, never a guess: a CLI it can't read says
-why. Only percentages, reset times, the plan's name and the signed-in account come back."""
+why. Only percentages, reset times, the plan's name and the signed-in account come back. Onix's pool
+and mesh read their own read-only services here instead (`# onix:` below), with counts, never labels."""
 
+import http.client
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 
 HOME = os.path.expanduser("~")
 MAC = sys.platform == "darwin"
@@ -486,8 +491,207 @@ def codex():
         close()
 
 
+# ---- pool and mesh (onix: Underclass's pool and mesh-llm, when they run on this machine) ---------
+# Read here, never through an agent: Underclass's monitor socket (tokenless, read-only) and mesh-llm's
+# console. Neither is a CLI, so neither needs bwrap; both are optional (no service, no key), and the
+# reads carry counts and names only: no label, email, account id or token ever comes back.
+
+POOL_SOCKET = "/run/underclass/monitor.sock"
+MESH_CONSOLE = "http://127.0.0.1:3131"
+SERVICE_TIMEOUT = 3
+# The pool's backends, in the order its monitor lists people's accounts; names as the plan rows say them.
+POOL_ORDER = ["codex", "claude", "opencode-go", "copilot"]
+POOL_NAMES = {"codex": "Codex", "claude": "Claude", "opencode-go": "OpenCode Go", "copilot": "Copilot"}
+# An account that can't serve now still counts in `accounts`, never in the headroom.
+POOL_OFF = ("disabled", "auth_error")
+OBSERVATION_WINDOWS = [("five_hour", "5-hour"), ("seven_day", "Weekly"), ("seven_day_fable", "Weekly (Fable)"),
+                       ("monthly", "Monthly")]
+# Windows read in this order within a backend (the shortest first), wherever they were first seen.
+WINDOW_ORDER = ["5-hour", "Weekly", "Weekly (Fable)", "Monthly", "Primary", "Secondary"]
+_MISSING = (FileNotFoundError, ConnectionRefusedError, NotADirectoryError)
+
+
+class _UnixHTTP(http.client.HTTPConnection):
+    """An HTTP connection over a unix socket: http.client has no client for one, and this file must
+    stay standalone (stdlib only)."""
+
+    def __init__(self, path, timeout):
+        super().__init__("localhost", timeout=timeout)
+        self.unix_path = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.unix_path)
+
+
+def _web_get(url, timeout=SERVICE_TIMEOUT):
+    """The body of an HTTP GET (bytes); an absent service and a failure both raise."""
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=timeout) as answer:
+        return answer.read()
+
+
+def _backend(account):
+    return str(account.get("backend") or "").strip().lower().replace("_", "-") or "unknown"
+
+
+def _account_windows(account):
+    """[(window name, % used, reset ms or None)]: Codex's quota windows, then Claude's and OpenCode Go's
+    observation windows (a 0..1 fraction there, a percentage in Codex's quota)."""
+    out = []
+    quota = account.get("quota") if isinstance(account.get("quota"), dict) else {}
+    rate = quota.get("rate_limit") if isinstance(quota.get("rate_limit"), dict) else {}
+    for key, fallback in (("primary_window", "Primary"), ("secondary_window", "Secondary")):
+        window = rate.get(key) if isinstance(rate.get(key), dict) else {}
+        used = window.get("used_percent")
+        if not isinstance(used, (int, float)):
+            continue
+        seconds = window.get("limit_window_seconds")
+        name = _window_name(int(seconds) // 60) if isinstance(seconds, (int, float)) and seconds > 0 else fallback
+        reset = window.get("reset_at")
+        out.append((name, float(used), int(reset * 1000) if isinstance(reset, (int, float)) else None))
+    observation = account.get("observation") if isinstance(account.get("observation"), dict) else {}
+    for key, name in OBSERVATION_WINDOWS:
+        window = observation.get(key) if isinstance(observation.get(key), dict) else {}
+        used = window.get("utilization")
+        if not isinstance(used, (int, float)):
+            continue
+        reset = window.get("resets_at_ms")
+        out.append((name, round(float(used) * 100, 1), int(reset) if isinstance(reset, (int, float)) else None))
+    return out
+
+
+def pool_read(payload):
+    """The monitor's accounts as a read: for each backend and window kind, the headroom of its best
+    usable account (the lowest % used, and that account's reset): the pool, not its worst account."""
+    accounts = payload.get("accounts") if isinstance(payload, dict) else None
+    if not isinstance(accounts, list):
+        return {"state": "unknown", "why": "Its monitor had no accounts in it"}
+    best, order = {}, []
+    listed, banked = [], 0
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        backend = _backend(account)
+        status = str(account.get("status") or "unknown")[:20]
+        quota = account.get("quota") if isinstance(account.get("quota"), dict) else {}
+        observation = account.get("observation") if isinstance(account.get("observation"), dict) else {}
+        resets = quota.get("available_resets")
+        if not isinstance(resets, (int, float)):
+            resets = observation.get("reset_credits")
+        row = {"backend": backend, "status": status}
+        if isinstance(account.get("plan"), str) and account["plan"]:
+            row["plan"] = str(account["plan"])[:20]
+        if isinstance(resets, (int, float)):
+            row["resets"] = int(resets)
+        listed.append(row)
+        if status in POOL_OFF:
+            continue
+        if backend == "codex" and isinstance(resets, (int, float)):
+            banked += int(resets)
+        for name, used, reset in _account_windows(account):
+            key = (backend, name)
+            if key not in best:
+                order.append(key)
+                best[key] = (used, reset)
+            elif used < best[key][0]:
+                best[key] = (used, reset)
+    rank = {b: i for i, b in enumerate(POOL_ORDER)}
+    rank_of = {name: i for i, name in enumerate(WINDOW_ORDER)}
+    order.sort(key=lambda k: (rank.get(k[0], len(rank)), rank_of.get(k[1], len(rank_of))))
+    windows = []
+    for backend, name in order:
+        used, reset = best[(backend, name)]
+        window = {"name": "%s · %s" % (POOL_NAMES.get(backend, backend.title()), name), "used": used}
+        if reset is not None:
+            window["resets_at"] = reset
+        windows.append(window)
+    return {"state": "ok", "windows": windows, "accounts": listed, "banked_resets": banked}
+
+
+def underclass():
+    """Underclass's pool, from its monitor socket here: None when this machine has no monitor."""
+    path = os.environ.get("SHEPHERDR_UNDERCLASS_MONITOR") or POOL_SOCKET
+    try:
+        if not os.path.exists(path):
+            return None
+    except OSError:
+        return None
+    conn = _UnixHTTP(path, SERVICE_TIMEOUT)
+    try:
+        conn.request("GET", "/monitor", headers={"Accept": "application/json"})
+        answer = conn.getresponse()
+        body = answer.read()
+        if answer.status != 200:
+            return {"state": "unknown", "why": "Its monitor answered HTTP %d" % answer.status}
+    except _MISSING:
+        return None
+    except (socket.timeout, TimeoutError):
+        return {"state": "unknown", "why": "Its monitor answered nothing in %d s" % SERVICE_TIMEOUT}
+    except (OSError, http.client.HTTPException) as e:
+        return {"state": "unknown", "why": "Couldn't ask its monitor: %s" % str(e or e.__class__.__name__)[:80]}
+    finally:
+        conn.close()
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except ValueError:
+        return {"state": "unknown", "why": "Its monitor's answer wasn't JSON"}
+    return pool_read(payload)
+
+
+def mesh_read(status, models=None):
+    """mesh-llm's status and models as a read: who it is and what it serves, never its console token."""
+    status = status if isinstance(status, dict) else {}
+    mesh = {}
+    if isinstance(status.get("version"), str) and status["version"]:
+        mesh["version"] = status["version"][:30]
+    if isinstance(status.get("peers"), (list, dict)):
+        mesh["peers"] = len(status["peers"])
+    serving = status.get("serving_models")
+    if not isinstance(serving, list):
+        serving = status.get("hosted_models")
+    if isinstance(serving, list):
+        names = []
+        for name in serving:
+            if isinstance(name, str) and name and name[:80] not in names:
+                names.append(name[:80])
+        mesh["serving"] = names
+    rows = models.get("mesh_models") if isinstance(models, dict) else None
+    if isinstance(rows, list):
+        mesh["models"] = sum(1 for row in rows if isinstance(row, dict) and row.get("status") == "warm")
+    read = {"state": "ok", "windows": [], "mesh": mesh}
+    if isinstance(status.get("node_state"), str) and status["node_state"]:
+        read["plan"] = status["node_state"][:30]
+    return read
+
+
+def mesh():
+    """mesh-llm's console here: None when nothing answers there (no mesh on this machine)."""
+    console = (os.environ.get("SHEPHERDR_MESH_CONSOLE") or MESH_CONSOLE).rstrip("/")
+    try:
+        body = _web_get(console + "/api/status")
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ConnectionRefusedError) or "refused" in str(e.reason).lower():
+            return None
+        if isinstance(e.reason, (socket.timeout, TimeoutError)) or "timed out" in str(e.reason).lower():
+            return {"state": "unknown", "why": "Its console answered nothing in %d s" % SERVICE_TIMEOUT}
+        return {"state": "unknown", "why": "Couldn't ask its console: %s" % str(e.reason)[:80]}
+    except (OSError, http.client.HTTPException) as e:
+        return {"state": "unknown", "why": "Couldn't ask its console: %s" % str(e or e.__class__.__name__)[:80]}
+    try:
+        status = json.loads(body.decode("utf-8"))
+    except ValueError:
+        return {"state": "unknown", "why": "Its console's answer wasn't JSON"}
+    try:
+        models = json.loads(_web_get(console + "/api/models").decode("utf-8"))
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
+        models = None
+    return mesh_read(status, models)
+
+
 def limits():
-    """{claude?, codex?}: each CLI here, read side by side."""
+    """{claude?, codex?, underclass?, mesh?}: each source here, read side by side."""
     out = {}
 
     def safely(key, read):
@@ -497,7 +701,8 @@ def limits():
             got = {"state": "unknown", "why": "Couldn't run it"}
         if got is not None:
             out[key] = dict(got, at=now_ms())
-    jobs = [threading.Thread(target=safely, args=a) for a in (("claude", claude), ("codex", codex))]
+    jobs = [threading.Thread(target=safely, args=a)
+            for a in (("claude", claude), ("codex", codex), ("underclass", underclass), ("mesh", mesh))]
     for j in jobs:
         j.start()
     for j in jobs:
