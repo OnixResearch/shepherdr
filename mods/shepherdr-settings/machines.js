@@ -25,7 +25,7 @@ import { dirs } from "./dirs.js";
 // What they say (the details' words, plan rows) too: the web's machine popup reads the same.
 import { HOLD, ALERT, settingsKey, holdOf, nextRead, healthMeters, healthLevel, healthWords, planLevelOf, planRows, planLevel, span,
   meterSub, healthReadWords, noHealthWords, noPlanWords, cliTitle, readOld, windowWords, failedWords, whyWords, ago, NO_USAGE,
-  READING_MACHINE } from "./core/machines.js";
+  readSummary, READING_MACHINE } from "./core/machines.js";
 export { HOLD, ALERT, settingsKey, holdOf, healthMeters, healthLevel, healthWords, planLevelOf, planRows, planLevel, span };
 
 const KEY = "machines.stats";
@@ -148,11 +148,14 @@ function cliBlock(t, mid, r, now) {
   const box = v_flex().id(`${mid}-${r.cli}`).gap(8).child(v_flex().gap(2).child(head({ text: `Read ${ago(read.at, now)}`, old }))
     .when(Boolean(read.account), (el) => el.child(div().truncate().text_size(11.5).text_color(t.dim).child(read.account))));
   if (read.state === "ok") {
+    // onix: a pool or a mesh has counts to show, not plan windows.
+    const summary = readSummary(read);
     return box.children(read.windows.map((w, i) => {
       const x = windowWords(w, now);
       if (x.dead) return div().id(`${mid}-${r.cli}-${i}`).text_size(12).text_color(t.dim).child(x.dead);
       return meterRow(t, `${mid}-${r.cli}-${i}`, x.name, x.pct, x.pct, x.level, x.words, x.refill);
-    })).when(Boolean(read.failed), (el) => el.child(div().text_size(11.5).text_color(t.working).child(failedWords(read))));
+    })).when(Boolean(summary), (el) => el.child(div().text_size(12).text_color(t.muted).child(summary)))
+      .when(Boolean(read.failed), (el) => el.child(div().text_size(11.5).text_color(t.working).child(failedWords(read))));
   }
   return box.child(div().text_size(12).text_color(t.muted).child(whyWords(read)));
 }

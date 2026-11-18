@@ -45,7 +45,8 @@ export const healthWords = (s) => healthMeters(s).map((m) => `${m.name} ${m.pct}
 export const meterSub = (m) => m.detail + (m.level === "over" ? " · Over its alert limit" : m.level === "busy" ? " · New tasks wait" : "");
 
 // The CLIs with a usage source; any other installed agent says "No usage info".
-export const READS = { claude: "Claude Code", codex: "Codex", elevenlabs: "ElevenLabs" };
+// onix: the Underclass pool and mesh-llm read here too (machine.py's underclass/mesh).
+export const READS = { claude: "Claude Code", codex: "Codex", elevenlabs: "ElevenLabs", underclass: "Underclass pool", mesh: "mesh-llm" };
 // A number older than this says how old it is.
 export const OLD = 15 * 60000;
 export const leftOf = (w) => Math.max(0, Math.round(100 - w.used));
@@ -70,6 +71,26 @@ export function planRows(s, now = Date.now()) {
 export const planLevel = (s) => worst(planRows(s).filter((r) => typeof r.pct === "number").map((r) => r.level));
 // The meter's words (the web's label for it): its health, then each plan's least left.
 export const meterWords = (s) => [healthWords(s), ...planRows(s).filter((r) => typeof r.pct === "number").map((r) => `${r.name} ${r.pct}% left`)].join(" · ");
+
+// onix: a read with numbers to show but no plan windows (the Underclass pool, mesh-llm): a short line for it.
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+export function readSummary(read) {
+  if (!read || read.state !== "ok" || (read.windows ?? []).length) return null;
+  if (Array.isArray(read.accounts)) {
+    if (!read.accounts.length) return "No accounts.";
+    const banked = Number(read.banked_resets) || 0;
+    return [count(read.accounts.length, "account", "accounts"), ...(banked > 0 ? [`${count(banked, "reset", "resets")} banked`] : [])].join(" · ");
+  }
+  if (read.mesh) {
+    const m = read.mesh;
+    const parts = [];
+    if (typeof m.models === "number") parts.push(count(m.models, "model", "models"));
+    if (typeof m.peers === "number") parts.push(count(m.peers, "peer", "peers"));
+    if (!parts.length && Array.isArray(m.serving) && m.serving.length) parts.push(count(m.serving.length, "model", "models"));
+    return parts.length ? parts.join(" · ") : null;
+  }
+  return null;
+}
 
 // 2m, 3h 10m, 5d 4h
 export function span(ms) {
