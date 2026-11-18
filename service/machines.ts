@@ -101,7 +101,10 @@ export class Machines {
     const health = { engine: "core", herdr: true, working: 0, held: 0, at: new Date(s.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       meters: healthMeters(s).map((x: any) => ({ name: x.name, pct: x.pct, detail: x.detail, level: x.level })) };
     const limits = s.limits ? Object.fromEntries(Object.entries<any>(s.limits).map(([k, v]) => [k, v.state === "ok"
-      ? { state: "ok", plan: v.plan, at: v.at ?? s.limitsAt, windows: (v.windows ?? []).map((w: any) => ({ name: w.name, used: w.used, ...(w.resets_at ? { resetsAt: w.resets_at } : {}) })) }
+      ? { state: "ok", plan: v.plan, at: v.at ?? s.limitsAt, windows: (v.windows ?? []).map((w: any) => ({ name: w.name, used: w.used, ...(w.resets_at ? { resetsAt: w.resets_at } : {}) })),
+        // onix: the Underclass pool's accounts and banked resets, and mesh-llm's counts, reach the web's Plan usage.
+        ...(k === "underclass" || k === "mesh" ? { ...(Array.isArray(v.accounts) ? { accounts: v.accounts } : {}),
+          ...(typeof v.banked_resets === "number" ? { banked_resets: v.banked_resets } : {}), ...(v.mesh ? { mesh: v.mesh } : {}) } : {}) }
       : { state: v.state ?? "unknown", why: v.why ?? "", at: v.at ?? s.limitsAt }])) : undefined;
     return { health, stats, ...(limits ? { limits } : {}) };
   }

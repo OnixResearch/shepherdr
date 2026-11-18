@@ -7,7 +7,10 @@ import type { Machine, MachineStats } from '@shared/types.ts'
 import * as MC from '@core/machines.js'
 
 type Level = 'ok' | 'busy' | 'over'
-interface Read { state: string; at: number; windows?: { name: string; used: number; resets_at?: number; resets?: string }[]; plan?: string; account?: string; why?: string; failed?: string }
+// onix: the pool and the mesh carry counts instead of windows (core.readSummary).
+interface Read { state: string; at: number; windows?: { name: string; used: number; resets_at?: number; resets?: string }[]; plan?: string; account?: string; why?: string; failed?: string
+  accounts?: { backend: string; status: string; plan?: string; resets?: number }[]; banked_resets?: number
+  mesh?: { version?: string; peers?: number; serving?: string[]; models?: number } }
 interface PlanRow { cli: string; name: string; read?: Read; none?: boolean }
 
 const core = MC as unknown as {
@@ -23,6 +26,7 @@ const core = MC as unknown as {
   failedWords: (read: Read) => string
   whyWords: (read: Read) => string
   ago: (at: number, now: number) => string
+  readSummary: (read: Read) => string | null
   NO_USAGE: string
   READING_MACHINE: string
 }
@@ -74,6 +78,7 @@ export function MachineDetails({ m }: { m?: Machine }) {
           const title = <h5 className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold phone:text-[0.9375rem]">{core.cliTitle(r)}</h5>
           if (r.none || !r.read) return <section key={r.cli} className="flex flex-col gap-1">{title}<p className={clsx(small, 'text-fg3')}>{core.NO_USAGE}</p></section>
           const read = r.read
+          const summary = core.readSummary(read)
           return (
             <section key={r.cli} className="flex flex-col gap-2">
               <div className="flex flex-col gap-0.5">
@@ -89,6 +94,7 @@ export function MachineDetails({ m }: { m?: Machine }) {
                     const x = core.windowWords(w, now)
                     return x.dead ? <p key={i} className={clsx(small, 'text-fg3')}>{x.dead}</p> : <Meter key={i} name={x.name!} pct={x.pct!} level={x.level!} words={x.words!} sub={x.refill} />
                   })}
+                  {summary ? <p className={clsx(small, 'text-fg2')}>{summary}</p> : null}
                   {read.failed ? <p className={clsx(small, 'text-work-fg')}>{core.failedWords(read)}</p> : null}
                 </>
               ) : (
