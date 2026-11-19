@@ -51,7 +51,8 @@ export function chips(id, options, value, onPick, { disabled = false } = {}) {
   }));
 }
 
-// Label and value rows (a run's facts): the label dim at the left, the value (text or an element) after it.
+// Label and value rows (a run's facts): the label dim at the left, the value (text or an element) after it. An
+// element is aligned to the start, so a pill or a link keeps its own width and long text still wraps in the column.
 export function facts(id, rows) {
   const t = theme();
   return v_flex().id(id).gap(4).children(rows.filter(Boolean).map(([label, value], i) =>
@@ -59,7 +60,7 @@ export function facts(id, rows) {
       .child(div().w(116).flex_none().text_size(TEXT.label).text_color(t.dim).child(label))
       .child(typeof value === "string" || typeof value === "number"
         ? div().flex_1().min_w(0).text_size(TEXT.label).text_color(t.foreground).child(String(value))
-        : div().flex_1().min_w(0).child(value))));
+        : v_flex().flex_1().min_w(0).items_start().child(value))));
 }
 
 // A card: an optional header row (title, right side), then its body.

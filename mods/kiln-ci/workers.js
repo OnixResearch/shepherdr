@@ -243,7 +243,9 @@ function projectsCard(k, w, id) {
         link(`${rid}-run-${j}`, shortRun(r), (_e, cx) => k.go({ page: "runs", run: r, view: "pipeline" }, cx))))
       : div().text_size(TEXT.id).text_color(t.dim).child("No occupied slot");
     return h_flex().id(rid).gap(6).items_center().min_w(0).px(4).py(4).border_b(1).border_color(t.border)
-      .child(div().flex_1().min_w(0).child(link(`${rid}-project`, p.label || p.id, (_e, cx) => k.go({ page: "project", project: p.id }, cx))))
+      // A long project name is cut, not run into the next column.
+      .child(div().id(`${rid}-project`).flex_1().min_w(0).truncate().text_size(TEXT.label).text_color(t.muted).cursor_pointer()
+        .hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => k.go({ page: "project", project: p.id }, cx)).child(p.label || p.id))
       .child(div().w(72).flex_none().text_size(TEXT.id).text_color(p.enrolled ? t.muted : t.dim).child(p.enrolled ? "Enrolled" : "Not enrolled"))
       .child(div().flex_1().min_w(0).child(slots))
       .child(div().w(42).flex_none().text_size(TEXT.id).text_color(t.muted).child(String(p.queued ?? 0)));

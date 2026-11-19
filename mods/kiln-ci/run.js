@@ -1358,12 +1358,19 @@ function recordedTree(k, cx, value, depth, prefix) {
 
 function rowLabeled(id, label, value, k, cx, depth, prefix, key = null) {
   const t = theme();
-  const shown = key ? valueFor(key, value, k, cx, depth, prefix) : (value !== null && typeof value === "object"
+  const nested = value !== null && typeof value === "object";
+  const shown = key ? valueFor(key, value, k, cx, depth, prefix) : (nested
     ? (depth >= 7 ? monotext(boundedJson(value), t.muted) : recordedTree(k, cx, value, depth + 1, prefix))
     : words(textOf(value), { size: TEXT.label }));
+  // A nested record goes under its label, indented, so deep records stay inside a narrow panel.
+  if (nested) {
+    return v_flex().id(id).gap(2).min_w(0)
+      .child(div().text_size(TEXT.id).text_color(t.dim).child(label))
+      .child(div().ml(2).pl(10).border_l(1).border_color(t.border).min_w(0).child(shown));
+  }
   return h_flex().id(id).gap(8).items_start().min_w(0)
     .child(div().w(132).flex_none().text_size(TEXT.id).text_color(t.dim).child(label))
-    .child(div().flex_1().min_w(0).child(shown));
+    .child(v_flex().flex_1().min_w(0).items_start().child(shown));
 }
 
 function valueFor(key, value, k, cx, depth, prefix) {
