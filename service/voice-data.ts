@@ -46,6 +46,7 @@ export const NOT_DATA: Record<string, string> = {
   "api:commands": "the / picker's command list above the message box",
   "api:reach": "the # picker's spaces above the message box (the same spaces as the snapshot's places)",
   "api:machines": "Find machines (Settings › Machines): reading it lists hosts nobody linked, pressing it logs in to them; only the person starts it (#967)",
+  "api:kiln": "where Kiln's website is, for the sidebar's Kiln link: a link, nothing shown", // onix
   "action:earlier": "a chat's older messages: look chat reads further back itself",
 };
 

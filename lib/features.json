@@ -1256,6 +1256,33 @@
         "usage.ts",
         "asks.ts"
       ]
+    },
+    {
+      "id": "kiln",
+      "addon": "kiln",
+      "title": "Kiln CI",
+      "core": [
+        "kiln"
+      ],
+      "herdr": {
+        "mods": [
+          "kiln-ci"
+        ]
+      },
+      "web": {
+        "files": [
+          "plugins/kiln/client.tsx"
+        ]
+      },
+      "forms": {
+        "herdr": "Kiln panel as on Kiln's website: Overview, Runs (a run's pipeline, logs, tests, artifacts and evidence), CI projects with Start run, Workers; cancel and retry; a bigger window",
+        "desktop": "Kiln at the sidebar's foot: Kiln's own website, in a new tab",
+        "tablet": "Same",
+        "phone": "Same, in the drawer's foot"
+      },
+      "service": [
+        "main.ts"
+      ]
     }
   ]
 }

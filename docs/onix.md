@@ -15,6 +15,7 @@ same way ([Install](install.md)).
 | Plan limits | Claude Code's `/usage`, Codex's rate limits | also the **Underclass pool** (headroom per backend, banked resets) and **mesh-llm** (models and peers) |
 | Merging | a pull request on GitHub, else a local merge | in an **Onix repo**: no pull request; after Accept, fast-forward the base branch and push it, or merge the task's **Radicle patch** |
 | Checks | GitHub checks on the pull request | in an Onix repo: the linked **Cairn change's gates** at Ready, **Kiln's CI** on the task before it merges, and Kiln's CI for the merged commit |
+| Side panel | Files, Changes, Tasks, Artifacts | also **Kiln**: Kiln's CI pages as on its website (overview, runs and what each ran, CI projects, workers), with start, cancel and rerun |
 | Keys | some panes keys in every layout | `Ctrl+K`, `Alt+Enter`, `Alt+Shift+Enter`, `Alt+Esc` and `Ctrl+Alt+arrows` only in the Shepherdr layout, so terminal programs keep them elsewhere |
 
 ## omp agents
@@ -128,10 +129,20 @@ A task's repo is an **Onix repo** when it has a `.cairn/` folder or its `origin`
   `onix.kiln.identity` (the BLAKE3 of its bytes; unset, `b3sum` of it there). A rebase at merge time can land on a
   newer base than the one Kiln checked.
   Kiln must be able to execute a dirty selection: its own workers rebuild the snapshot from Kiln's store; a project
-  whose execution provider can't (a Lattice-provider project, when this was first tried) gets the run marked
+  whose execution provider can't (a Lattice workflow whose job binary is gone, say) gets the run marked
   `unknown` (`provider_unknown`) at once. An unknown run keeps its project busy in Kiln until an operator reconciles
   it there, so the check reads Kiln's `unknown` as unknown (holding nothing) and sends nothing more for a project
   that has one, saying which run holds it.
+- **Kiln panel:** the tab bar's Kiln (the Kiln CI add-on; Shepherdr settings › Window can switch it off) shows Kiln's
+  CI as its website does: Overview (failing projects first, what's in progress, what passed, worker capacity, recent
+  activity), Runs (filters, then a run's pipeline, logs, artifacts, tests and coverage, Patchgate reviews, comparison,
+  activity and evidence), CI projects (start a run, enroll a project, a project's history) and Workers. Its expand
+  button opens the same in a bigger window. It talks to Kiln's own API at `onix.kiln.url` (Kiln's website,
+  `https://host:port`) over the tailnet, where Kiln's proxy signs this machine in by its Tailscale identity as it
+  does a browser; `onix.kiln.ca` is a copy of Kiln's CA certificate on this computer when Kiln's certificate is its
+  own. While it is on screen it follows Kiln live (every 1.5 s, as the website). Start, cancel, approve and rerun
+  need Kiln's operate permission; cancel, approve and rerun are asked first in the website's words, and every
+  request is sent once and never retried. The web app has Kiln at the sidebar's foot: it opens Kiln's website.
 - The role instructions tell agents to follow each repo's own AGENTS.md and CONTRIBUTING.md: its pinned tools,
   its Cairn change, its declared gates, no pull requests, no force-push and no Radicle push (Shepherdr opens and
   merges a task's patch itself).
@@ -150,7 +161,8 @@ All in `~/.config/shepherdr/settings.json`, beside the upstream ones (`everywher
       "forge": "auto",
       "radicle": "off",
       "kiln": { "machine": "<herdr-core machine name>", "db": "~/git/.kiln-web-service/web-live/service.sqlite",
-                "before_merge": true, "developer": "~/.config/kiln/developer.json", "identity": "<b3sum of it>" }
+                "before_merge": true, "developer": "~/.config/kiln/developer.json", "identity": "<b3sum of it>",
+                "url": "https://<kiln host>:9443", "ca": "~/.config/shepherdr/kiln-ca.pem" }
     }
   },
   "machines": { "<machine>": { "onix": { "underclass_key_cmd": "cat /run/secrets/…/proxy-key" } } },

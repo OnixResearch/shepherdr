@@ -276,6 +276,13 @@
                         }
                       ],
                       "active": "artifacts-list"
+                    },
+                    {
+                      "id": "kiln",
+                      "type": "block",
+                      "content": {
+                        "mod": "kiln-ci"
+                      }
                     }
                   ],
                   "active": "tasks"

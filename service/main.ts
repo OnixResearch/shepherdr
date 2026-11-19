@@ -58,6 +58,7 @@ import { folders, newSpace, newSpaceInfo } from "./spaces.ts";
 import { kindOf } from "../core/chat-reader.js";
 import * as SL from "../core/slash.js";
 import * as SCORE from "../core/settings.js";
+import { kilnSettings } from "../core/kiln.js";  // onix: Kiln's CI (mods/kiln, web/plugins/kiln)
 const SC = SCORE as any;
 const { SCAN, scanned, commandList, MENU } = SL as any;
 import * as HCORE from "../core/host.js";
@@ -360,6 +361,10 @@ const ATTACH = join(process.env.HERDR_APP_HOME || join(HOME, ".config", "herdr-a
 function webOn() {
   if (process.env.SHEPHERDR_WEB === "off") return false;
   try { return !(JSON.parse(readFileSync(settingsFile(), "utf8"))?.everywhere?.off ?? []).includes("web"); } catch { return true; }
+}
+// onix: Kiln's website (onix.kiln.url in Shepherdr settings, core/kiln.js) for the web app's Kiln link, or null.
+function kilnUrl(): string | null {
+  try { return kilnSettings(JSON.parse(readFileSync(settingsFile(), "utf8"))).url; } catch { return null; }
 }
 
 // Tailscale can come up after the service: look again now and then, and keep /shepherdr shared while web is on. What
@@ -753,6 +758,7 @@ const server = Bun.serve<{ who: string }>({
       return srv.upgrade(req, { data: { who: pass.who, from } as any }) ? undefined : new Response("upgrade failed", { status: 400 });
     }
     if (path === "/api/me") return json({ login: pass.who, via: pass.via, machine: me?.host ?? null, link: ownLink(), version: VERSION, off: offPlugins() });
+    if (path === "/api/kiln") return json({ url: kilnUrl() }); // onix
     if (path === "/api/state" && req.method === "GET") return json(store.doc.version ? store.doc : await store.load());
     if (path === "/api/state" && req.method === "POST") {
       const body = await req.json().catch(() => null);

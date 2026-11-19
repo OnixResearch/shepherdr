@@ -15,6 +15,7 @@
     "limits",
     "alerts",
     "keyboard",
-    "autopilot"
+    "autopilot",
+    "kiln"
   ]
 }

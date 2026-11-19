@@ -179,7 +179,9 @@ export default class Tabs extends View {
     const panel = find(root, "panel"), body = find(root, "panel-body");
     // Tasks and Artifacts are offered (Artifacts unless its add-on is off), beside whichever of
     // Files and Changes are on.
-    const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), "tasks", ...(addonOn("artifacts") ? ["artifacts"] : [])];
+    // onix: and Kiln's CI panel (mods/kiln) unless its add-on is off.
+    const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), "tasks", ...(addonOn("artifacts") ? ["artifacts"] : []),
+      ...(addonOn("kiln") ? ["kiln"] : [])];
     this.syncPanel(space, panel, body, enabled);
     // The side panels' buttons, one style for all: icon first; the label when the bar has room
     // (the open one keeps its label); a count after the icon (Tasks': what needs the person, red,
@@ -210,6 +212,7 @@ export default class Tabs extends View {
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .child(panelButton("tasks", "Tasks", "mods/tasks/tasks.svg", [counts ? inboxCount() : 0, greens ? readyCount() : 0]))
       .when(enabled.includes("artifacts"), el => el.child(panelButton("artifacts", "Artifacts", "mods/artifacts/artifacts.svg")))
+      .when(enabled.includes("kiln"), el => el.child(panelButton("kiln", "Kiln", "mods/kiln-ci/kiln.svg"))) // onix: Kiln's CI
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs-tasks/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs-tasks/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/tabs-tasks/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));
